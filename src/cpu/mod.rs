@@ -1,6 +1,5 @@
 
 #![allow(non_snake_case)]
-use wasm_bindgen::prelude::*;
 mod instruction;
 mod flags;
 use self::flags::Flags;

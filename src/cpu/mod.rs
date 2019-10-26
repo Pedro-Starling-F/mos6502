@@ -1,11 +1,16 @@
-
 #![allow(non_snake_case)]
+
+#[cfg(feature = "quarter")]
+const MAX_MEM:usize = 0x2000;
+
+#[cfg(feature = "full")]
+const MAX_MEM:usize = 0x10000;
+
 mod instruction;
 mod flags;
 use self::flags::Flags;
 use self::instruction::Instruction;
 
-#[wasm_bindgen]
 #[derive(Clone)]
 pub struct Cpu{
     a: u8,
@@ -17,17 +22,15 @@ pub struct Cpu{
     addr: Option<u16>,
     pub cycles: u8,
     pub in_nmi:bool,
-    mem:[u8;0x10000],
+    mem:[u8;MAX_MEM],
     instruction: Instruction,
-    max_addr:u16,
 }
 
 impl Cpu{
     pub fn new(mem:&[u8]) -> Cpu {
         let instr = Instruction(0xEA);
-        let mut memory:[u8;0x10000] = [0;0x10000];
-        let max_addr = mem.len() - 1;
-        memory[0..=max_addr].copy_from_slice(mem);
+        let mut memory:[u8;MAX_MEM] = [0;MAX_MEM];
+        memory[0..MAX_MEM].copy_from_slice(mem);
         Cpu{
             a: 0,
             x: 0,
@@ -38,9 +41,8 @@ impl Cpu{
             addr: None,
             cycles: 0,
             in_nmi: false,
-            mem:[0;0x10000],
+            mem:[0;MAX_MEM],
             instruction: instr,
-            max_addr:max_addr as u16,
         }
     }
     pub fn irq(&mut self){
@@ -69,30 +71,28 @@ impl Cpu{
         self.store8(sp,s);
     }
     pub fn load8(&self, addr:u16)->u8{
-        let addr = (addr % self.max_addr) as usize;
+        let addr = addr as usize;
         self.mem[addr]
     }
     pub fn load16(&self, addr:u16)->u16{
-        let addr = (addr % self.max_addr) as usize;
+        let addr = addr as usize;
         (self.mem[addr] as u16) << 8 | self.mem[addr+1] as u16
     }
     pub fn store8(&mut self, addr:u16, val:u8){
-        let addr = (addr % self.max_addr) as usize;
+        let addr = addr as usize;
         self.mem[addr] = val;
     }
     pub fn store16(&mut self,addr:u16,val:u16){
-        let addr = (addr % self.max_addr) as usize;
+        let addr = addr as usize;
         self.mem[addr] = (val >> 8) as u8;
         self.mem[addr+1] = val as u8;
     }
     pub fn start(&mut self){
-        let reset: u16 = self.load16(self.max_addr - 3);
+        let reset: u16 = self.load16((MAX_MEM - 3) as u16);
         self.pc = reset;
     }
     pub fn run_next_instruction(&mut self)->fn(&mut Cpu)->fn(&mut Cpu){
         let pc = self.pc;
-        //let f = format!("{:04X} A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} ",pc,self.a,self.x,self.y,self.s.get(),self.sp);
-        //web_sys::console::log_1(&JsValue::from(f));
         let val = self.load8(pc);
         self.pc+=1;
         self.cycles+=2;
@@ -140,7 +140,7 @@ impl Cpu{
                             5 => Cpu::LDY,
                             6 => Cpu::CPY,
                             7 => Cpu::CPX,
-                            _ => {web_sys::console::log_1(&JsValue::from("INVALID ADDRESSING MODE 0"));Cpu::NOP},
+                            _ => Cpu::NOP,
                         }
                     }else{
                         Cpu::relative
@@ -157,7 +157,7 @@ impl Cpu{
                         5 => Cpu::LDA,
                         6 => Cpu::CMP,
                         7 => Cpu::SBC,
-                        _ => {web_sys::console::log_1(&JsValue::from("INVALID ADDRESSING MODE 1"));Cpu::NOP},
+                        _ => Cpu::NOP,
                     }
                 },
                 2 =>{
@@ -171,10 +171,10 @@ impl Cpu{
                         5 => Cpu::LDX,
                         6 => Cpu::DEC,
                         7 => Cpu::INC,
-                        _ => {web_sys::console::log_1(&JsValue::from("INVALID ADDRESSING MODE 2"));Cpu::NOP},
+                        _ => Cpu::NOP,
                     }
                 },
-                _ => {web_sys::console::log_1(&JsValue::from("INVALID INSTRUCTION"));Cpu::NOP},
+                _ => Cpu::NOP,
             }
         }
     }
@@ -186,7 +186,7 @@ impl Cpu{
             4 => None,
             5 => Some(self.zero_page_r()),
             7 => Some(self.absolute_x()),
-            _ => {web_sys::console::log_1(&JsValue::from("UNHANDLED ADDRESSING MODE 0"));None},
+            _ => None,
         }
     }
     fn addressing1(&mut self){
@@ -199,7 +199,7 @@ impl Cpu{
             5 => self.zero_page_r(),
             6 => self.absolute_y(),
             7 => self.absolute_x(),
-            _ => {web_sys::console::log_1(&JsValue::from("UNHANDLED ADDRESSING MODE 1"));0},
+            _ => 0,
         })
     }
     fn addressing2(&mut self){
@@ -213,7 +213,7 @@ impl Cpu{
                         5 => self.absolute_y(),
                         _ => self.absolute_x(),
                 }),
-            _ => {web_sys::console::log_1(&JsValue::from("UNHANDLED ADDRESSING MODE 2"));None},
+            _ => None,
         }
     }
     fn indirect_indexed(&mut self) -> u16 {
@@ -291,7 +291,7 @@ impl Cpu{
             1 => if self.s.get_overflow() == self.instruction.y() {self.branch()},
             2 => if self.s.get_carry() == self.instruction.y() {self.branch()},
             3 => if self.s.get_zero() == self.instruction.y() {self.branch()},
-            _ => web_sys::console::log_1(&JsValue::from("UNHANDLED BRANCH")),
+            _ =>{},
         };
         self.pc+=1;
     }
@@ -428,8 +428,6 @@ impl Cpu{
         if let Some(addr) = self.addr{
             let x = self.x;
             self.store8(addr, x);
-        }else{
-            web_sys::console::log_1(&JsValue::from("UNHANDLED ADDR IN STX"));
         }
     }
     fn LDX(&mut self){
@@ -437,8 +435,6 @@ impl Cpu{
         let val = self.load8(addr);
         self.set_flags_z_n(val);
         self.x = val;
-        }else{
-            web_sys::console::log_1(&JsValue::from("UNHANDLED ADDR IN LDX"));
         }
     }
     fn DEC(&mut self){
@@ -446,8 +442,6 @@ impl Cpu{
             let m = self.load8(addr).wrapping_sub(1);
             self.store8(addr,m);
             self.set_flags_z_n(m);
-        }else{
-            web_sys::console::log_1(&JsValue::from("UNHANDLED ADDR IN DEC"));
         }
     }
     fn INC(&mut self){
@@ -455,8 +449,6 @@ impl Cpu{
             let m = self.load8(addr).wrapping_add(1);
             self.store8(addr,m);
             self.set_flags_z_n(m);
-        }else{
-            web_sys::console::log_1(&JsValue::from("UNHANDLED ADDR IN INC"));
         }
     }
     fn BIT(&mut self){

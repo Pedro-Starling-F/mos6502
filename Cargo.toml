@@ -12,3 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [profile.release]
 opt-level = "s"
 lto = true
+
+[features]
+full = []
+quarter = []

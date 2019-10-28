@@ -1,15 +1,16 @@
 #![allow(non_snake_case)]
 
-#[cfg(feature = "quarter")]
-const MAX_MEM:usize = 0x2000;
-
-#[cfg(feature = "full")]
-const MAX_MEM:usize = 0x10000;
-
 mod instruction;
 mod flags;
 use self::flags::Flags;
 use self::instruction::Instruction;
+use crate::Memory;
+
+#[cfg(feature = "quarter")]
+pub const MAX_MEM:usize = 0x2000;
+
+#[cfg(feature = "full")]
+pub const MAX_MEM:usize = 0x10000;
 
 #[derive(Clone)]
 pub struct Cpu{
@@ -22,15 +23,12 @@ pub struct Cpu{
     addr: Option<u16>,
     pub cycles: u8,
     pub in_nmi:bool,
-    mem:[u8;MAX_MEM],
+    mem:Memory,
     instruction: Instruction,
 }
 
 impl Cpu{
-    pub fn new(mem:&[u8]) -> Cpu {
-        let instr = Instruction(0xEA);
-        let mut memory:[u8;MAX_MEM] = [0;MAX_MEM];
-        memory[0..MAX_MEM].copy_from_slice(mem);
+    pub fn new(mem:Memory) -> Cpu {
         Cpu{
             a: 0,
             x: 0,
@@ -41,8 +39,8 @@ impl Cpu{
             addr: None,
             cycles: 0,
             in_nmi: false,
-            mem:[0;MAX_MEM],
-            instruction: instr,
+            mem:mem,
+            instruction: Instruction(0xEA),
         }
     }
     pub fn irq(&mut self){
@@ -50,12 +48,12 @@ impl Cpu{
             self.sp-=2;
             let sp = self.sp as u16 + 0x101;
             let pc = self.pc;
-            self.store16(sp,pc);
-            self.pc = self.load16(0xFFFE);
+            self.mem.store16(sp,pc);
+            self.pc = self.mem.load16(0xFFFE);
             self.sp-=1;
             let sp = self.sp as u16 + 0x101;
             let s = self.s.get() | 0b00100000;
-            self.store8(sp,s);
+            self.mem.store8(sp,s);
         }       
     }
     pub fn nmi(&mut self){
@@ -63,37 +61,20 @@ impl Cpu{
         self.sp-=2;
         let sp = self.sp as u16 + 0x101;
         let pc = self.pc;
-        self.store16(sp,pc);
-        self.pc = self.load16(0xFFFA);
+        self.mem.store16(sp,pc);
+        self.pc = self.mem.load16(0xFFFA);
         self.sp-=1;
         let sp = self.sp as u16 + 0x101;
         let s = self.s.get();
-        self.store8(sp,s);
-    }
-    pub fn load8(&self, addr:u16)->u8{
-        let addr = addr as usize;
-        self.mem[addr]
-    }
-    pub fn load16(&self, addr:u16)->u16{
-        let addr = addr as usize;
-        (self.mem[addr] as u16) << 8 | self.mem[addr+1] as u16
-    }
-    pub fn store8(&mut self, addr:u16, val:u8){
-        let addr = addr as usize;
-        self.mem[addr] = val;
-    }
-    pub fn store16(&mut self,addr:u16,val:u16){
-        let addr = addr as usize;
-        self.mem[addr] = (val >> 8) as u8;
-        self.mem[addr+1] = val as u8;
+        self.mem.store8(sp,s);
     }
     pub fn start(&mut self){
-        let reset: u16 = self.load16((MAX_MEM - 3) as u16);
+        let reset: u16 = self.mem.load16((MAX_MEM - 3) as u16);
         self.pc = reset;
     }
     pub fn run_next_instruction(&mut self)->fn(&mut Cpu)->fn(&mut Cpu){
         let pc = self.pc;
-        let val = self.load8(pc);
+        let val = self.mem.load8(pc);
         self.pc+=1;
         self.cycles+=2;
         self.instruction.set(val);
@@ -218,9 +199,9 @@ impl Cpu{
     }
     fn indirect_indexed(&mut self) -> u16 {
         let pc = self.pc;
-        let id = self.load8(pc);
+        let id = self.mem.load8(pc);
         self.pc+=1;
-        let idix = self.load16(id as u16);
+        let idix = self.mem.load16(id as u16);
         let idixy = idix.wrapping_add(self.y as u16);
         self.cycles+=4;
         idixy
@@ -228,9 +209,9 @@ impl Cpu{
     fn indexed_indirect(&mut self) -> u16 {
         let pc = self.pc;
         let x = self.x;
-        let id = self.load8(pc).wrapping_add(x);
+        let id = self.mem.load8(pc).wrapping_add(x);
         self.pc+=1;
-        let ixid = self.load16(id as u16);
+        let ixid = self.mem.load16(id as u16);
         self.cycles+=4;
         ixid
     }
@@ -241,20 +222,20 @@ impl Cpu{
     fn zero_page(&mut self) -> u16 {
         let pc = self.pc;
         self.cycles+=1;
-        let zp = self.load8(pc);
+        let zp = self.mem.load8(pc);
         self.pc+=1;
         zp as u16
     }
     fn zero_page_r(&mut self) -> u16 {
         let pc = self.pc;
-        let zpr = self.load8(pc);
+        let zpr = self.mem.load8(pc);
         self.pc+=1;
         self.cycles+=2;
         zpr.wrapping_add(self.x) as u16
     }
     fn zero_page_r2(&mut self) -> u16 {
         let pc = self.pc;
-        let zpr = self.load8(pc);
+        let zpr = self.mem.load8(pc);
         self.pc+=1;
         self.cycles+=2;
         match self.instruction.aaa(){
@@ -264,14 +245,14 @@ impl Cpu{
     }
     fn absolute(&mut self) -> u16 {
         let pc = self.pc;
-        let id = self.load16(pc);
+        let id = self.mem.load16(pc);
         self.pc+=2;
         self.cycles+=2;
         id
     }
     fn absolute_x(&mut self) -> u16 {
         let pc = self.pc;
-        let mut idx = self.load16(pc);
+        let mut idx = self.mem.load16(pc);
         idx += self.x as u16;
         self.pc+=2;
         self.cycles+=3;
@@ -279,7 +260,7 @@ impl Cpu{
     }
     fn absolute_y(&mut self) -> u16 {
         let pc = self.pc;
-        let mut idy = self.load16(pc);
+        let mut idy = self.mem.load16(pc);
         idy = idy.wrapping_add(self.y as u16);
         self.pc+=2;
         self.cycles+=3;
@@ -297,7 +278,7 @@ impl Cpu{
     }
     fn branch(&mut self) {
         let pc = self.pc;
-        let offset = self.load8(pc)as i8;
+        let offset = self.mem.load8(pc)as i8;
         self.pc = (self.pc as i32).wrapping_add(offset as i32) as u16;
         if (pc/256)!=(self.pc/256) {
             self.cycles+=2;
@@ -306,28 +287,28 @@ impl Cpu{
     }
     fn ORA(&mut self){
         let addr = self.addr;
-        let m = self.load8(addr.unwrap());
+        let m = self.mem.load8(addr.unwrap());
         let a = self.a|m;
         self.set_flags_z_n(a);
         self.a = a;
     }
     fn AND(&mut self){
         let addr = self.addr;
-        let m = self.load8(addr.unwrap());
+        let m = self.mem.load8(addr.unwrap());
         let a= self.a&m;
         self.set_flags_z_n(a);
         self.a = a;
     }
     fn EOR(&mut self){
         let addr = self.addr;
-        let m = self.load8(addr.unwrap());
+        let m = self.mem.load8(addr.unwrap());
         let a = self.a^m;
         self.a = a;
         self.set_flags_z_n(a);
     }
     fn ADC(&mut self){
         let addr = self.addr;
-        let m = self.load8(addr.unwrap()) as i8;
+        let m = self.mem.load8(addr.unwrap()) as i8;
         let c = self.s.get_carry() as i8;
         let (mc,o) = m.overflowing_add(c);
         let (_,c) = (self.a as i8).overflowing_add(mc);
@@ -339,23 +320,23 @@ impl Cpu{
     fn STA(&mut self){
         let addr = self.addr;
         let a = self.a;
-        self.store8(addr.unwrap(),a);
+        self.mem.store8(addr.unwrap(),a);
     }
     fn LDA(&mut self){
         let addr = self.addr;
-        let val = self.load8(addr.unwrap());
+        let val = self.mem.load8(addr.unwrap());
         self.set_flags_z_n(val);
         self.a = val;
     }
     fn CMP(&mut self){
         let addr = self.addr;
-        let val = self.load8(addr.unwrap());
+        let val = self.mem.load8(addr.unwrap());
         let (res,o) = self.a.overflowing_sub(val);
         self.set_flags_z_n_c(res,!o);
     }
     fn SBC(&mut self){
         let addr = self.addr;
-        let m = self.load8(addr.unwrap());
+        let m = self.mem.load8(addr.unwrap());
         let cf = self.s.get_carry() as u8;
         let (mc,o) = (self.a as i8).overflowing_sub(m as i8);
         let (_,of) = mc.overflowing_sub(1-cf as i8);
@@ -368,10 +349,10 @@ impl Cpu{
     }
     fn ASL(&mut self){
         if let Some(addr) = self.addr{
-            let mut m = self.load8(addr);
+            let mut m = self.mem.load8(addr);
             let m2 = m;
             m = m<<1;
-            self.store8(addr,m);
+            self.mem.store8(addr,m);
             self.set_flags_z_n_c(m,m2&0x80==0x80);
         }else{
             let a1 = self.a<<1;
@@ -382,11 +363,11 @@ impl Cpu{
     }
     fn ROL(&mut self){
         if let Some(addr) = self.addr{
-            let m = self.load8(addr);
+            let m = self.mem.load8(addr);
             let m2 = m;
             let (m,_) = m.overflowing_mul(2);
             let (m,_) = m.overflowing_add(self.s.get_carry() as u8);
-            self.store8(addr,m);
+            self.mem.store8(addr,m);
             self.set_flags_z_n_c(m,m2&0x80==0x80);
         }else{
             let (a1,_) = self.a.overflowing_mul(2);
@@ -398,10 +379,10 @@ impl Cpu{
     }
     fn LSR(&mut self){
         if let Some(addr) = self.addr{
-            let mut m = self.load8(addr);
+            let mut m = self.mem.load8(addr);
             let m2 = m;
             m = m>>1;
-            self.store8(addr,m);
+            self.mem.store8(addr,m);
             self.set_flags_z_n_c(m,m2&1==1);
         }else{
             let a1 = self.a>>1;
@@ -412,10 +393,10 @@ impl Cpu{
     }
     fn ROR(&mut self){
         if let Some(addr) = self.addr{
-            let mut m = self.load8(addr);
+            let mut m = self.mem.load8(addr);
             let m2 = m;
             m = m/2 + ((self.s.get_carry() as u8) << 7);
-            self.store8(addr,m);
+            self.mem.store8(addr,m);
             self.set_flags_z_n_c(m,m2&1==1);
         }else{
             let a1 = self.a/2 + ((self.s.get_carry() as u8) << 7);
@@ -427,33 +408,33 @@ impl Cpu{
     fn STX(&mut self){
         if let Some(addr) = self.addr{
             let x = self.x;
-            self.store8(addr, x);
+            self.mem.store8(addr, x);
         }
     }
     fn LDX(&mut self){
         if let Some(addr) = self.addr{
-        let val = self.load8(addr);
+        let val = self.mem.load8(addr);
         self.set_flags_z_n(val);
         self.x = val;
         }
     }
     fn DEC(&mut self){
         if let Some(addr) = self.addr{
-            let m = self.load8(addr).wrapping_sub(1);
-            self.store8(addr,m);
+            let m = self.mem.load8(addr).wrapping_sub(1);
+            self.mem.store8(addr,m);
             self.set_flags_z_n(m);
         }
     }
     fn INC(&mut self){
         if let Some(addr) = self.addr{
-            let m = self.load8(addr).wrapping_add(1);
-            self.store8(addr,m);
+            let m = self.mem.load8(addr).wrapping_add(1);
+            self.mem.store8(addr,m);
             self.set_flags_z_n(m);
         }
     }
     fn BIT(&mut self){
         let addr = self.addr;
-        let m = self.load8(addr.unwrap());
+        let m = self.mem.load8(addr.unwrap());
         let res = self.a&m;
         self.set_flags_z_n_o(res,m);
     }
@@ -462,34 +443,34 @@ impl Cpu{
     }
     fn JMI(&mut self){
         let addr = self.addr;
-        let valL = self.load8(addr.unwrap());
+        let valL = self.mem.load8(addr.unwrap());
         let addrH = self.addr.unwrap() & 0xFF00;
         let addrL = self.addr.unwrap() as u8;
         let addr = addrH | addrL.wrapping_add(1) as u16; 
-        let valH = self.load8(addr);
+        let valH = self.mem.load8(addr);
         self.pc = valL as u16 | (valH as u16)<<8;
     }
     fn STY(&mut self){
         let y = self.y;
         let addr = self.addr;
-        self.store8(addr.unwrap(),y);
+        self.mem.store8(addr.unwrap(),y);
     }
     fn LDY(&mut self){
         let addr = self.addr;
-        let m = self.load8(addr.unwrap());
+        let m = self.mem.load8(addr.unwrap());
         self.y = m;
         self.set_flags_z_n(m);
     }
     fn CPY(&mut self){
         let addr = self.addr;
-        let val = self.load8(addr.unwrap());
+        let val = self.mem.load8(addr.unwrap());
         let y = self.y;
         let (res,o) = y.overflowing_sub(val);
         self.set_flags_z_n_c(res,!o);
     }
     fn CPX(&mut self){
         let addr = self.addr;
-        let val = self.load8(addr.unwrap());
+        let val = self.mem.load8(addr.unwrap());
         let x = self.x;
         let (res,o) = x.overflowing_sub(val);
         self.set_flags_z_n_c(res,!o);
@@ -502,7 +483,7 @@ impl Cpu{
         self.sp-=2;
         let sp = self.sp as u16 + 0x101;
         let pc = self.pc-1;
-        self.store16(sp, pc);
+        self.mem.store16(sp, pc);
         self.pc = self.addr.unwrap();
         self.cycles+=2;
     }
@@ -510,28 +491,28 @@ impl Cpu{
         self.in_nmi = false;
         self.cycles+=4;
         let sp = self.sp as u16 + 0x101;
-        let s = self.load8(sp) & 0b11001111;
+        let s = self.mem.load8(sp) & 0b11001111;
         self.sp +=3;
         self.s.set(s);
-        self.pc = self.load16(sp+1);
+        self.pc = self.mem.load16(sp+1);
         self.cycles+=4;
     }
     fn RTS(&mut self){
         self.cycles+=4;
         let s = self.sp as u16 + 0x101;
-        self.pc = self.load16(s)+1;
+        self.pc = self.mem.load16(s)+1;
         self.sp+=2;
     }
     fn PHP(&mut self){
         self.sp-=1;
         let sp = self.sp as u16 + 0x101;
         let s = self.s.get() | 0b0110000;
-        self.store8(sp, s);
+        self.mem.store8(sp, s);
         self.cycles+=1;
     }
     fn PLP(&mut self){
         let s:u16 = self.sp as u16 + 0x101;
-        let p = self.load8(s) & 0b11001111;
+        let p = self.mem.load8(s) & 0b11001111;
         self.s.set(p);
         self.sp+=1;
         self.cycles+=2;
@@ -540,12 +521,12 @@ impl Cpu{
         self.sp-=1;
         let a = self.a;
         let sp = self.sp as u16 + 0x101;
-        self.store8(sp, a);
+        self.mem.store8(sp, a);
         self.cycles+=1;
     }
     fn PLA(&mut self){
         let s = self.sp as u16 + 0x101;
-        let a = self.load8(s); 
+        let a = self.mem.load8(s); 
         self.a = a;
         self.sp+=1;
         self.set_flags_z_n(a);

@@ -1,5 +1,5 @@
 #[derive(Clone)]
-pub struct Memory(Vec<Box<dyn Interconnect>>);
+pub struct Memory(pub Vec<Box<dyn Interconnect>>);
 
 
 impl Memory{

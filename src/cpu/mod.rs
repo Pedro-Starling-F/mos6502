@@ -72,7 +72,7 @@ impl Cpu{
         let reset: u16 = self.mem.load16((MAX_MEM - 3) as u16);
         self.pc = reset;
     }
-    pub fn run_next_instruction(&mut self)->fn(&mut Cpu)->fn(&mut Cpu){
+    pub fn fetch(&mut self)->fn(&mut Cpu)->fn(&mut Cpu){
         let pc = self.pc;
         let val = self.mem.load8(pc);
         self.pc+=1;
@@ -80,7 +80,7 @@ impl Cpu{
         self.instruction.set(val);
         return Cpu::decode_and_execute;
     }
-    pub fn decode_and_execute(&mut self)->fn(&mut Cpu){
+    pub fn decode(&mut self)->fn(&mut Cpu){
         match self.instruction.get(){
             0x00 => Cpu::BRK,
             0x08 => Cpu::PHP,

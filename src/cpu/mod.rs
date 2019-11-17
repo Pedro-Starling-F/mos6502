@@ -78,7 +78,7 @@ impl Cpu{
         self.pc+=1;
         self.cycles+=2;
         self.instruction.set(val);
-        return Cpu::decode_and_execute;
+        return Cpu::decode;
     }
     pub fn decode(&mut self)->fn(&mut Cpu){
         match self.instruction.get(){

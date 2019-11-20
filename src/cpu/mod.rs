@@ -5,12 +5,20 @@ mod flags;
 use self::flags::Flags;
 use self::instruction::Instruction;
 use crate::Memory;
+use States::*;
 
 #[cfg(feature = "quarter")]
 pub const MAX_MEM:usize = 0x2000;
 
 #[cfg(feature = "full")]
 pub const MAX_MEM:usize = 0x10000;
+
+#[derive(PartialEq, Clone, Copy, Eq)]
+enum States{
+    Fetch,
+    Decode,
+    Execute,
+}
 
 #[derive(Clone)]
 pub struct Cpu{
@@ -25,6 +33,8 @@ pub struct Cpu{
     pub in_nmi:bool,
     mem:Memory,
     instruction: Instruction,
+    states:States,
+    current_instr:fn(&mut Cpu),
 }
 
 impl Cpu{
@@ -41,6 +51,8 @@ impl Cpu{
             in_nmi: false,
             mem:mem,
             instruction: Instruction(0xEA),
+            states:Fetch,
+            current_instr:Cpu::NOP
         }
     }
     pub fn irq(&mut self){
@@ -72,15 +84,26 @@ impl Cpu{
         let reset: u16 = self.mem.load16((MAX_MEM - 3) as u16);
         self.pc = reset;
     }
-    pub fn fetch(&mut self)->fn(&mut Cpu)->fn(&mut Cpu){
+    pub fn run(&mut self)->u8{
+        self.cycles = 0;
+        match self.states{
+            Fetch => {self.fetch();
+                      self.states = Decode;},
+            Decode => {self.current_instr=self.decode();
+                       self.states = Execute;},
+            Execute =>{(self.current_instr)(self);
+                        self.states = Fetch;}
+        }
+        self.cycles
+    }
+    fn fetch(&mut self){
         let pc = self.pc;
         let val = self.mem.load8(pc);
         self.pc+=1;
         self.cycles+=2;
         self.instruction.set(val);
-        return Cpu::decode;
     }
-    pub fn decode(&mut self)->fn(&mut Cpu){
+    fn decode(&mut self)->fn(&mut Cpu){
         match self.instruction.get(){
             0x00 => Cpu::BRK,
             0x08 => Cpu::PHP,

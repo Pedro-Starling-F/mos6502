@@ -1,4 +1,5 @@
-pub use interconnect::Interconnect;
+pub mod interconnect;
+use interconnect::Interconnect;
 
 #[derive(Clone)]
 pub struct Memory(pub Vec<Box<dyn Interconnect>>);

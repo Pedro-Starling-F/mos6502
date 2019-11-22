@@ -31,7 +31,7 @@ pub struct Cpu{
     addr: Option<u16>,
     pub cycles: u8,
     pub in_nmi:bool,
-    mem:Memory,
+    pub mem:Memory,
     instruction: Instruction,
     states:States,
     current_instr:fn(&mut Cpu),

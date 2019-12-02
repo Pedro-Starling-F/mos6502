@@ -44,7 +44,7 @@ impl Cpu{
             x: 0,
             y: 0,
             s: Flags::new(),
-            sp: 0xFD,
+            sp: 0xFF,
             pc: 0,
             addr: None,
             cycles: 0,
@@ -57,26 +57,26 @@ impl Cpu{
     }
     pub fn irq(&mut self){
         if !self.s.get_interrupt(){
-            self.sp-=2;
-            let sp = self.sp as u16 + 0x101;
+            self.sp = self.sp.wrapping_sub(2);
+            let sp = self.sp as u16 + 0x100;
             let pc = self.pc;
             self.mem.store16(sp,pc);
             self.pc = self.mem.load16(0xFFFE);
-            self.sp-=1;
-            let sp = self.sp as u16 + 0x101;
+            self.sp = self.sp.wrapping_sub(1);
+            let sp = self.sp as u16 + 0x100;
             let s = self.s.get() | 0b00100000;
             self.mem.store8(sp,s);
         }       
     }
     pub fn nmi(&mut self){
         self.in_nmi = true;
-        self.sp-=2;
-        let sp = self.sp as u16 + 0x101;
+        self.sp = self.sp.wrapping_sub(2);
+        let sp = self.sp as u16 + 0x100;
         let pc = self.pc;
         self.mem.store16(sp,pc);
         self.pc = self.mem.load16(0xFFFA);
-        self.sp-=1;
-        let sp = self.sp as u16 + 0x101;
+        self.sp = self.sp.wrapping_sub(1);
+        let sp = self.sp as u16 + 0x100;
         let s = self.s.get();
         self.mem.store8(sp,s);
     }
@@ -503,8 +503,8 @@ impl Cpu{
         self.irq();
     }
     fn JSR(&mut self){
-        self.sp-=2;
-        let sp = self.sp as u16 + 0x101;
+        self.sp = self.sp.wrapping_sub(2);
+        let sp = self.sp as u16 + 0x100;
         let pc = self.pc-1;
         self.mem.store16(sp, pc);
         self.pc = self.addr.unwrap();
@@ -513,45 +513,50 @@ impl Cpu{
     fn RTI(&mut self){
         self.in_nmi = false;
         self.cycles+=4;
-        let sp = self.sp as u16 + 0x101;
+        let sp = self.sp as u16 + 0x100;
         let s = self.mem.load8(sp) & 0b11001111;
-        self.sp +=3;
-        self.s.set(s);
+        self.mem.store8(sp, 0);
+        self.s.set(s);        
         self.pc = self.mem.load16(sp+1);
+        self.mem.store16(sp+1, 0);
+        self.sp = self.sp.wrapping_add(3);
         self.cycles+=4;
     }
     fn RTS(&mut self){
         self.cycles+=4;
-        let s = self.sp as u16 + 0x101;
+        let s = self.sp as u16 + 0x100;
         self.pc = self.mem.load16(s)+1;
-        self.sp+=2;
+        self.mem.store16(s, 0);
+        self.sp = self.sp.wrapping_add(2);
     }
     fn PHP(&mut self){
-        self.sp-=1;
-        let sp = self.sp as u16 + 0x101;
+        self.sp = self.sp.wrapping_sub(1);
+        let sp = self.sp as u16 + 0x100;
         let s = self.s.get() | 0b0110000;
         self.mem.store8(sp, s);
         self.cycles+=1;
     }
     fn PLP(&mut self){
-        let s:u16 = self.sp as u16 + 0x101;
+        let s:u16 = self.sp as u16 + 0x100;
         let p = self.mem.load8(s) & 0b11001111;
         self.s.set(p);
-        self.sp+=1;
+        self.mem.store8(s, 0);
+        self.sp = self.sp.wrapping_add(1);
         self.cycles+=2;
     }
     fn PHA(&mut self){
-        self.sp-=1;
+        self.sp = self.sp.wrapping_sub(1);
         let a = self.a;
-        let sp = self.sp as u16 + 0x101;
+        let sp = self.sp as u16 + 0x100;
         self.mem.store8(sp, a);
         self.cycles+=1;
     }
     fn PLA(&mut self){
-        let s = self.sp as u16 + 0x101;
+        let s = self.sp as u16 + 0x100;
         let a = self.mem.load8(s); 
         self.a = a;
-        self.sp+=1;
+        self.sp = self.sp.wrapping_add(1);
+        self.mem.store8(s, 0);
         self.set_flags_z_n(a);
         self.cycles+=2;
     }
@@ -617,11 +622,13 @@ impl Cpu{
     fn TSX(&mut self){
         let s = self.sp;
         self.x = s;
-        self.set_flags_z_n(s);}
+        self.set_flags_z_n(s);
+    }
     fn DEX(&mut self){
         let x = self.x.wrapping_sub(1);
         self.x = x;
-        self.set_flags_z_n(x);}
+        self.set_flags_z_n(x);
+    }
     fn NOP(&mut self){}
     fn set_flags_z_n(&mut self,res:u8){
         self.s.set_zero(res == 0);

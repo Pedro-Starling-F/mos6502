@@ -1,3 +1,6 @@
+pub mod interconnect;
+pub use interconnect::Interconnect;
+
 #[derive(Clone)]
 pub struct Memory(pub Vec<Box<dyn Interconnect>>);
 
@@ -34,26 +37,6 @@ impl Memory{
     }
 }
 
-pub trait Interconnect: InterconnectClone{
-    fn load8(&self, addr:u16)->Option<u8>;
-    fn store8(&mut self, addr:u16,val:u8);
-}
-pub trait InterconnectClone {
-    fn clone_box(&self) -> Box<dyn Interconnect>;
-}
-impl<T> InterconnectClone for T 
-where 
-    T: 'static + Interconnect + Clone,
-{
-    fn clone_box(&self) -> Box<dyn Interconnect>{
-        Box::new(self.clone())
-    }
-}
-impl Clone for Box<dyn Interconnect>{
-    fn clone(&self) -> Box<dyn Interconnect>{
-        self.clone_box()
-    }
-}
 pub fn u16_to_u8(x:u16) -> [u8;2] {
     let b0 : u8 = (x >> 8) as u8;
     let b1 : u8 = x as u8;

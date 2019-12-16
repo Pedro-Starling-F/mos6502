@@ -1,4 +1,3 @@
-#[derive(Copy, Clone)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct Instruction(pub u8);
 impl Instruction {

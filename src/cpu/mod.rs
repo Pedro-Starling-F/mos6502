@@ -7,12 +7,6 @@ use self::instruction::Instruction;
 use crate::Memory;
 use States::*;
 
-#[cfg(feature = "quarter")]
-pub const MAX_MEM:usize = 0x2000;
-
-#[cfg(feature = "full")]
-pub const MAX_MEM:usize = 0x10000;
-
 #[derive(PartialEq, Clone, Copy, Eq)]
 enum States{
     Fetch,
@@ -81,7 +75,7 @@ impl Cpu{
         self.mem.store8(sp,s);
     }
     pub fn start(&mut self){
-        let reset: u16 = self.mem.load16((MAX_MEM - 3) as u16);
+        let reset: u16 = self.mem.load16(0xFFFC);
         self.pc = reset;
     }
     pub fn run(&mut self)->u8{

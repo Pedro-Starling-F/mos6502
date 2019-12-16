@@ -34,7 +34,7 @@ pub struct Cpu{
     pub mem:Memory,
     instruction: Instruction,
     states:States,
-    current_instr:fn(&mut Cpu),
+    pub current_instr:fn(&mut Cpu),
 }
 
 impl Cpu{

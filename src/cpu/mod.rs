@@ -32,9 +32,9 @@ pub struct Cpu{
     pub cycles: u8,
     pub in_nmi:bool,
     pub mem:Memory,
-    instruction: Instruction,
+    pub instruction: Instruction,
     states:States,
-    pub current_instr:fn(&mut Cpu),
+    current_instr:fn(&mut Cpu),
 }
 
 impl Cpu{

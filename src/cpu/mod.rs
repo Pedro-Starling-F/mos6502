@@ -508,13 +508,11 @@ impl Cpu{
     fn RTI(&mut self){
         self.in_nmi = false;
         self.cycles+=4;
-        self.sp = self.sp.wrapping_add(1);
         let sp = self.sp as u16 + 0x100;
-        let s = self.mem.load8(sp) & 0b11001111;
-        self.mem.store8(sp, 0);
+        let s = self.mem.load8(sp + 1) & 0b11001111;
         self.s.set(s);        
-        self.sp = self.sp.wrapping_add(2);
-        self.pc = self.mem.load16(sp);
+        self.pc = self.mem.load16(sp + 2);
+        self.sp = self.sp.wrapping_add(3);
         println!("{:0x}",self.pc);
         self.mem.store16(sp-2, 0);
         self.cycles+=4;

@@ -514,7 +514,6 @@ impl Cpu{
         self.pc = self.mem.load16(sp + 2);
         self.sp = self.sp.wrapping_add(3);
         println!("{:0x}",self.pc);
-        self.mem.store16(sp-2, 0);
         self.cycles+=4;
     }
     fn RTS(&mut self){

@@ -94,10 +94,11 @@ impl Cpu{
         let pc = self.pc;
         let val = self.mem.load8(pc);
         self.pc+=1;
-        self.cycles+=2;
+        self.cycles+=1;
         self.instruction.set(val);
     }
     fn decode(&mut self)->fn(&mut Cpu){
+        self.cycles+=1;
         match self.instruction.get(){
             0x00 => Cpu::BRK,
             0x08 => Cpu::PHP,
@@ -456,6 +457,7 @@ impl Cpu{
         self.set_flags_z_n_o(res,m);
     }
     fn JMP(&mut self){ 
+        println!("{:0x}", self.addr.unwrap());
         self.pc = self.addr.unwrap();
     }
     fn JMI(&mut self){

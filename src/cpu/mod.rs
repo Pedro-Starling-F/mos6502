@@ -457,7 +457,6 @@ impl Cpu{
         self.set_flags_z_n_o(res,m);
     }
     fn JMP(&mut self){ 
-        println!("{:0x}", self.addr.unwrap());
         self.pc = self.addr.unwrap();
     }
     fn JMI(&mut self){

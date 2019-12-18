@@ -513,6 +513,7 @@ impl Cpu{
         self.mem.store8(sp, 0);
         self.s.set(s);        
         self.pc = self.mem.load16(sp+1);
+        println!("{:0x}",self.pc);
         self.mem.store16(sp+1, 0);
         self.sp = self.sp.wrapping_add(3);
         self.cycles+=4;

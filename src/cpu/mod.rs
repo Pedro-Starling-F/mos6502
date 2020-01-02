@@ -509,11 +509,11 @@ impl Cpu{
         self.in_nmi = false;
         self.cycles+=4;
         let sp = self.sp as u16 + 0x100;
-        let s = self.mem.load8(sp + 1) & 0b11001111;
+        let s = self.mem.load8(sp) & 0b11001111;
         self.s.set(s);        
         self.pc = self.mem.load16(sp + 2);
         self.sp = self.sp.wrapping_add(3);
-        println!("{:0x}",self.pc);
+        println!("RTI:{:0x}",self.pc);
         self.cycles+=4;
     }
     fn RTS(&mut self){

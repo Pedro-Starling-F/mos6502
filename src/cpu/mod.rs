@@ -27,6 +27,7 @@ pub struct Cpu{
     pub in_nmi:bool,
     pub mem:Memory,
     pub instruction: Instruction,
+    pub debug_port:String,
     states:States,
     current_instr:fn(&mut Cpu),
 }
@@ -45,6 +46,7 @@ impl Cpu{
             in_nmi: false,
             mem:mem,
             instruction: Instruction(0xEA),
+            debug_port: "".to_string(),
             states:Fetch,
             current_instr:Cpu::NOP
         }
@@ -513,14 +515,13 @@ impl Cpu{
         self.s.set(s);        
         self.pc = self.mem.load16(sp + 2);
         self.sp = self.sp.wrapping_add(3);
-        println!("RTI:{:0x}",self.pc);
+        self.debug_port = format!("RTI:{:0x}",self.pc);
         self.cycles+=4;
     }
     fn RTS(&mut self){
         self.cycles+=4;
         let s = self.sp as u16 + 0x100;
         self.pc = self.mem.load16(s)+1;
-        self.mem.store16(s, 0);
         self.sp = self.sp.wrapping_add(2);
     }
     fn PHP(&mut self){

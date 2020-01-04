@@ -27,7 +27,7 @@ pub struct Cpu{
     pub in_nmi:bool,
     pub mem:Memory,
     pub instruction: Instruction,
-    pub debug_port:Option<String>,
+    pub debug_port:Option<u16>,
     states:States,
     current_instr:fn(&mut Cpu),
 }
@@ -515,7 +515,7 @@ impl Cpu{
         self.s.set(s);        
         self.pc = self.mem.load16(sp + 2);
         self.sp = self.sp.wrapping_add(3);
-        self.debug_port = Some(format!("RTI:{:0x}",self.pc));
+        self.debug_port = Some(self.pc);
         self.cycles+=4;
     }
     fn RTS(&mut self){

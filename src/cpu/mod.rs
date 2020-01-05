@@ -2,10 +2,13 @@
 
 mod instruction;
 mod flags;
+
 use self::flags::Flags;
 use self::instruction::Instruction;
 use crate::Memory;
 use States::*;
+
+use log::trace;
 
 #[derive(PartialEq, Clone, Copy, Eq)]
 enum States{
@@ -27,7 +30,6 @@ pub struct Cpu{
     pub in_nmi:bool,
     pub mem:Memory,
     pub instruction: Instruction,
-    pub debug_port:Option<u16>,
     states:States,
     current_instr:fn(&mut Cpu),
 }
@@ -46,7 +48,6 @@ impl Cpu{
             in_nmi: false,
             mem:mem,
             instruction: Instruction(0xEA),
-            debug_port: None,
             states:Fetch,
             current_instr:Cpu::NOP
         }
@@ -515,7 +516,7 @@ impl Cpu{
         self.s.set(s);        
         self.pc = self.mem.load16(sp + 2);
         self.sp = self.sp.wrapping_add(3);
-        self.debug_port = Some(self.pc);
+        trace!("RTI:{:?}",self.pc);
         self.cycles+=4;
     }
     fn RTS(&mut self){

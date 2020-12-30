@@ -5,7 +5,7 @@ mod flags;
 
 use self::flags::Flags;
 use self::instruction::Instruction;
-use crate::Memory;
+use super::Memory;
 use States::*;
 
 use log::trace;

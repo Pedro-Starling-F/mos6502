@@ -3,7 +3,7 @@ pub struct Flags(u8);
 impl Flags {
     pub fn new() -> Flags {
         Flags{
-            0 : 0x04,
+            0 : 0x24,
         }
     }
     pub fn set(&mut self,s:u8){

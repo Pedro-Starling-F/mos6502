@@ -19,13 +19,13 @@ enum States{
 
 #[derive(Clone)]
 pub struct Cpu{
-    a: u8,
-    x: u8,
-    y: u8,
-    s: Flags,
-    sp: u8,
-    pc: u16,
-    addr: Option<u16>,
+    pub a: u8,
+    pub x: u8,
+    pub y: u8,
+    pub s: Flags,
+    pub sp: u8,
+    pub pc: u16,
+    pub addr: Option<u16>,
     pub cycles: u8,
     pub in_nmi:bool,
     pub mem:Memory,
@@ -41,7 +41,7 @@ impl Cpu{
             x: 0,
             y: 0,
             s: Flags::new(),
-            sp: 0xFF,
+            sp: 0xFD,
             pc: 0,
             addr: None,
             cycles: 0,
@@ -57,12 +57,12 @@ impl Cpu{
             self.sp = self.sp.wrapping_sub(2);
             let sp = self.sp as u16 + 0x100;
             let pc = self.pc;
-            self.mem.store16(sp,pc);
+            self.mem.store16(sp+1,pc);
             self.pc = self.mem.load16(0xFFFE);
             self.sp = self.sp.wrapping_sub(1);
             let sp = self.sp as u16 + 0x100;
-            let s = self.s.get() | 0b00100000;
-            self.mem.store8(sp,s);
+            let s = self.s.get();
+            self.mem.store8(sp+1,s);
         }       
     }
     pub fn nmi(&mut self){
@@ -70,12 +70,12 @@ impl Cpu{
         self.sp = self.sp.wrapping_sub(2);
         let sp = self.sp as u16 + 0x100;
         let pc = self.pc;
-        self.mem.store16(sp,pc);
+        self.mem.store16(sp+1,pc);
         self.pc = self.mem.load16(0xFFFA);
         self.sp = self.sp.wrapping_sub(1);
         let sp = self.sp as u16 + 0x100;
         let s = self.s.get();
-        self.mem.store8(sp,s);
+        self.mem.store8(sp+1,s);
     }
     pub fn start(&mut self){
         let reset: u16 = self.mem.load16(0xFFFC);
@@ -96,6 +96,7 @@ impl Cpu{
     fn fetch(&mut self){
         let pc = self.pc;
         let val = self.mem.load8(pc);
+        //trace!("{:04X} {:02X} A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} ",pc,val,self.a,self.x,self.y,self.s.get(),self.sp);
         self.pc+=1;
         self.cycles+=1;
         self.instruction.set(val);
@@ -142,7 +143,7 @@ impl Cpu{
                             5 => Cpu::LDY,
                             6 => Cpu::CPY,
                             7 => Cpu::CPX,
-                            _ => Cpu::NOP,
+                            _ => panic!(),
                         }
                     }else{
                         Cpu::relative
@@ -159,7 +160,7 @@ impl Cpu{
                         5 => Cpu::LDA,
                         6 => Cpu::CMP,
                         7 => Cpu::SBC,
-                        _ => Cpu::NOP,
+                        _ => panic!(),
                     }
                 },
                 2 =>{
@@ -173,10 +174,10 @@ impl Cpu{
                         5 => Cpu::LDX,
                         6 => Cpu::DEC,
                         7 => Cpu::INC,
-                        _ => Cpu::NOP,
+                        _ => panic!(),
                     }
                 },
-                _ => Cpu::NOP,
+                _ => panic!(),
             }
         }
     }
@@ -504,7 +505,7 @@ impl Cpu{
         self.sp = self.sp.wrapping_sub(2);
         let sp = self.sp as u16 + 0x100;
         let pc = self.pc-1;
-        self.mem.store16(sp, pc);
+        self.mem.store16(sp+1, pc);
         self.pc = self.addr.unwrap();
         self.cycles+=2;
     }
@@ -512,31 +513,29 @@ impl Cpu{
         self.in_nmi = false;
         self.cycles+=4;
         let sp = self.sp as u16 + 0x100;
-        let s = self.mem.load8(sp) & 0b11001111;
+        let s = self.mem.load8(sp+1);
         self.s.set(s);        
         self.pc = self.mem.load16(sp + 2);
-        self.sp = self.sp.wrapping_add(3);
-        trace!("RTI:{:?}",self.pc);
+        self.sp = self.sp.wrapping_add(2);
         self.cycles+=4;
     }
     fn RTS(&mut self){
         self.cycles+=4;
-        let s = self.sp as u16 + 0x100;
-        self.pc = self.mem.load16(s)+1;
+        let sp = self.sp as u16 + 0x100;
+        self.pc = self.mem.load16(sp+1)+1;
         self.sp = self.sp.wrapping_add(2);
     }
     fn PHP(&mut self){
         self.sp = self.sp.wrapping_sub(1);
         let sp = self.sp as u16 + 0x100;
-        let s = self.s.get() | 0b0110000;
-        self.mem.store8(sp, s);
+        let s = self.s.get();
+        self.mem.store8(sp+1, s);
         self.cycles+=1;
     }
     fn PLP(&mut self){
-        let s:u16 = self.sp as u16 + 0x100;
-        let p = self.mem.load8(s) & 0b11001111;
+        let sp:u16 = self.sp as u16 + 0x100;
+        let p = self.mem.load8(sp+1);
         self.s.set(p);
-        self.mem.store8(s, 0);
         self.sp = self.sp.wrapping_add(1);
         self.cycles+=2;
     }
@@ -544,15 +543,14 @@ impl Cpu{
         self.sp = self.sp.wrapping_sub(1);
         let a = self.a;
         let sp = self.sp as u16 + 0x100;
-        self.mem.store8(sp, a);
+        self.mem.store8(sp+1, a);
         self.cycles+=1;
     }
     fn PLA(&mut self){
-        let s = self.sp as u16 + 0x100;
-        let a = self.mem.load8(s); 
+        let sp = self.sp as u16 + 0x100;
+        let a = self.mem.load8(sp+1); 
         self.a = a;
         self.sp = self.sp.wrapping_add(1);
-        self.mem.store8(s, 0);
         self.set_flags_z_n(a);
         self.cycles+=2;
     }

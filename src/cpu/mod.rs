@@ -5,7 +5,6 @@ mod flags;
 
 use self::flags::Flags;
 use self::instruction::Instruction;
-use super::Memory;
 use States::*;
 
 use log::trace;
@@ -28,14 +27,13 @@ pub struct Cpu{
     pub addr: Option<u16>,
     pub cycles: u8,
     pub in_nmi:bool,
-    pub mem:Memory,
     pub instruction: Instruction,
     states:States,
-    current_instr:fn(&mut Cpu),
+    current_instr:fn(&mut Cpu, &mut [u8]),
 }
 
 impl Cpu{
-    pub fn new(mem:Memory) -> Cpu {
+    pub fn new() -> Cpu {
         Cpu{
             a: 0,
             x: 0,
@@ -46,68 +44,89 @@ impl Cpu{
             addr: None,
             cycles: 0,
             in_nmi: false,
-            mem:mem,
             instruction: Instruction(0xEA),
             states:Fetch,
             current_instr:Cpu::NOP
         }
     }
-    pub fn irq(&mut self){
+    pub fn load8(&self, mem:&mut[u8], addr:u16)->u8{
+        mem[addr as usize]
+    }
+    pub fn store8(&mut self, mem:&mut [u8],addr:u16, value: u8){
+        mem[addr as usize] = value;
+    }
+    pub fn store16(&mut self, mem:&mut [u8], addr:u16,val:u16){
+        let v = val.to_le_bytes();
+        self.store8(mem,addr,v[0]);
+        self.store8(mem,addr+1,v[1]);
+    }
+    pub fn load16(&self, mem:&mut [u8],addr:u16)->u16{
+        let addr2:u16;
+        if addr == 0xFF {
+            addr2 = 0x0
+        }else{
+            addr2 = addr+1;
+        }
+        let b0 = self.load8(mem,addr);
+        let b1 = self.load8(mem,addr2);
+        return u16::from_le_bytes([b0,b1]);
+    }
+    pub fn irq(&mut self, mem:&mut [u8]){
         if !self.s.get_interrupt(){
             self.sp = self.sp.wrapping_sub(2);
             let sp = self.sp as u16 + 0x100;
             let pc = self.pc;
-            self.mem.store16(sp+1,pc);
-            self.pc = self.mem.load16(0xFFFE);
+            self.store16(mem,sp+1,pc);
+            self.pc = self.load16(mem,0xFFFE);
             self.sp = self.sp.wrapping_sub(1);
             let sp = self.sp as u16 + 0x100;
             let s = self.s.get();
-            self.mem.store8(sp+1,s);
+            self.store8(mem,sp+1,s);
         }       
     }
-    pub fn nmi(&mut self){
+    pub fn nmi(&mut self, mem:&mut [u8]){
         self.in_nmi = true;
         self.sp = self.sp.wrapping_sub(2);
         let sp = self.sp as u16 + 0x100;
         let pc = self.pc;
-        self.mem.store16(sp+1,pc);
-        self.pc = self.mem.load16(0xFFFA);
+        self.store16(mem,sp+1,pc);
+        self.pc = self.load16( mem,0xFFFA);
         self.sp = self.sp.wrapping_sub(1);
         let sp = self.sp as u16 + 0x100;
         let s = self.s.get();
-        self.mem.store8(sp+1,s);
+        self.store8(mem, sp+1,s);
     }
-    pub fn start(&mut self){
-        let reset: u16 = self.mem.load16(0xFFFC);
+    pub fn start(&mut self, mem:&mut [u8]){
+        let reset: u16 = self.load16( mem,0xFFFC);
         self.pc = reset;
     }
-    pub fn run(&mut self)->u8{
+    pub fn run(&mut self, mem:&mut [u8])->u8{
         self.cycles = 0;
         match self.states{
-            Fetch => {self.fetch();
+            Fetch => {self.fetch(mem);
                       self.states = Decode;},
-            Decode => {self.current_instr=self.decode();
+            Decode => {self.current_instr=self.decode(mem);
                        self.states = Execute;},
-            Execute =>{(self.current_instr)(self);
+            Execute =>{(self.current_instr)(self, mem);
                         self.states = Fetch;}
         }
         self.cycles
     }
-    fn fetch(&mut self){
+    fn fetch(&mut self, mem:&mut [u8]){
         let pc = self.pc;
-        let val = self.mem.load8(pc);
+        let val = self.load8(mem, pc);
         //trace!("{:04X} {:02X} A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} ",pc,val,self.a,self.x,self.y,self.s.get(),self.sp);
         self.pc+=1;
         self.cycles+=1;
         self.instruction.set(val);
     }
-    fn decode(&mut self)->fn(&mut Cpu){
+    fn decode(&mut self, mem:&mut [u8])->fn(&mut Cpu, &mut [u8]){
         self.cycles+=1;
         match self.instruction.get(){
             0x00 => Cpu::BRK,
             0x08 => Cpu::PHP,
             0x18 => Cpu::CLC,
-            0x20 =>{self.addr=Some(self.absolute());
+            0x20 =>{self.addr=Some(self.absolute(mem));
                     Cpu::JSR},
             0x28 => Cpu::PLP,
             0x38 => Cpu::SEC,
@@ -133,7 +152,7 @@ impl Cpu{
             0xF8 => Cpu::SED,
             _ => match self.instruction.cc() {
                 0 =>{
-                    if let Some(i) = self.addressing0(){
+                    if let Some(i) = self.addressing0(mem){
                         self.addr = Some(i);
                         match self.instruction.aaa() {
                             1 => Cpu::BIT,
@@ -150,7 +169,7 @@ impl Cpu{
                     }
                 },
                 1 =>{
-                    self.addressing1();  
+                    self.addressing1(mem);
                     match self.instruction.aaa() {
                         0 => Cpu::ORA,
                         1 => Cpu::AND,
@@ -164,7 +183,7 @@ impl Cpu{
                     }
                 },
                 2 =>{
-                    self.addressing2();
+                    self.addressing2(mem);
                     match self.instruction.aaa() {
                         0 => Cpu::ASL,
                         1 => Cpu::ROL,
@@ -181,83 +200,83 @@ impl Cpu{
             }
         }
     }
-    fn addressing0(&mut self) -> Option<u16>{
+    fn addressing0(&mut self, mem:&mut [u8]) -> Option<u16>{
         match self.instruction.bbb() {
-            0 => Some(self.immediate()),
-            1 => Some(self.zero_page()),
-            3 => Some(self.absolute()),
+            0 => Some(self.immediate(mem)),
+            1 => Some(self.zero_page(mem)),
+            3 => Some(self.absolute(mem)),
             4 => None,
-            5 => Some(self.zero_page_r()),
-            7 => Some(self.absolute_x()),
+            5 => Some(self.zero_page_r(mem)),
+            7 => Some(self.absolute_x(mem)),
             _ => None,
         }
     }
-    fn addressing1(&mut self){
+    fn addressing1(&mut self, mem:&mut [u8]){
         self.addr = Some(match self.instruction.bbb() {
-            0 => self.indexed_indirect(),
-            1 => self.zero_page(),
-            2 => self.immediate(),
-            3 => self.absolute(),
-            4 => self.indirect_indexed(),
-            5 => self.zero_page_r(),
-            6 => self.absolute_y(),
-            7 => self.absolute_x(),
+            0 => self.indexed_indirect(mem),
+            1 => self.zero_page(mem),
+            2 => self.immediate(mem),
+            3 => self.absolute(mem),
+            4 => self.indirect_indexed(mem),
+            5 => self.zero_page_r(mem),
+            6 => self.absolute_y(mem),
+            7 => self.absolute_x(mem),
             _ => 0,
         })
     }
-    fn addressing2(&mut self){
+    fn addressing2(&mut self, mem:&mut [u8]){
         self.addr = match self.instruction.bbb() {
-            0 => Some(self.immediate()),
-            1 => Some(self.zero_page()),
+            0 => Some(self.immediate(mem)),
+            1 => Some(self.zero_page(mem)),
             2 => None,
-            3 => Some(self.absolute()),
-            5 => Some(self.zero_page_r2()),
+            3 => Some(self.absolute(mem)),
+            5 => Some(self.zero_page_r2(mem)),
             7 => Some(match self.instruction.aaa(){
-                        5 => self.absolute_y(),
-                        _ => self.absolute_x(),
+                        5 => self.absolute_y(mem),
+                        _ => self.absolute_x(mem),
                 }),
             _ => None,
         }
     }
-    fn indirect_indexed(&mut self) -> u16 {
+    fn indirect_indexed(&mut self, mem:&mut [u8]) -> u16 {
         let pc = self.pc;
-        let id = self.mem.load8(pc);
+        let id = self.load8(mem, pc);
         self.pc+=1;
-        let idix = self.mem.load16(id as u16);
+        let idix = self.load16( mem,id as u16);
         let idixy = idix.wrapping_add(self.y as u16);
         self.cycles+=4;
         idixy
     }
-    fn indexed_indirect(&mut self) -> u16 {
+    fn indexed_indirect(&mut self, mem:&mut [u8]) -> u16 {
         let pc = self.pc;
         let x = self.x;
-        let id = self.mem.load8(pc).wrapping_add(x);
+        let id = self.load8(mem, pc).wrapping_add(x);
         self.pc+=1;
-        let ixid = self.mem.load16(id as u16);
+        let ixid = self.load16( mem,id as u16);
         self.cycles+=4;
         ixid
     }
-    fn immediate(&mut self) -> u16 {
+    fn immediate(&mut self, mem:&mut [u8]) -> u16 {
         self.pc+=1;
         self.pc - 1
     }
-    fn zero_page(&mut self) -> u16 {
+    fn zero_page(&mut self, mem:&mut [u8]) -> u16 {
         let pc = self.pc;
         self.cycles+=1;
-        let zp = self.mem.load8(pc);
+        let zp = self.load8(mem, pc);
         self.pc+=1;
         zp as u16
     }
-    fn zero_page_r(&mut self) -> u16 {
+    fn zero_page_r(&mut self, mem:&mut [u8]) -> u16 {
         let pc = self.pc;
-        let zpr = self.mem.load8(pc);
+        let zpr = self.load8(mem, pc);
         self.pc+=1;
         self.cycles+=2;
         zpr.wrapping_add(self.x) as u16
     }
-    fn zero_page_r2(&mut self) -> u16 {
+    fn zero_page_r2(&mut self, mem:&mut [u8]) -> u16 {
         let pc = self.pc;
-        let zpr = self.mem.load8(pc);
+        let zpr = self.load8(mem, pc);
         self.pc+=1;
         self.cycles+=2;
         match self.instruction.aaa(){
@@ -265,72 +284,72 @@ impl Cpu{
             _ => zpr.wrapping_add(self.x) as u16,
         }
     }
-    fn absolute(&mut self) -> u16 {
+    fn absolute(&mut self, mem:&mut [u8]) -> u16 {
         let pc = self.pc;
-        let id = self.mem.load16(pc);
+        let id = self.load16( mem,pc);
         self.pc+=2;
         self.cycles+=2;
         id
     }
-    fn absolute_x(&mut self) -> u16 {
+    fn absolute_x(&mut self, mem:&mut [u8]) -> u16 {
         let pc = self.pc;
-        let mut idx = self.mem.load16(pc);
+        let mut idx = self.load16( mem,pc);
         idx += self.x as u16;
         self.pc+=2;
         self.cycles+=3;
         idx
     }
-    fn absolute_y(&mut self) -> u16 {
+    fn absolute_y(&mut self, mem:&mut [u8]) -> u16 {
         let pc = self.pc;
-        let mut idy = self.mem.load16(pc);
+        let mut idy = self.load16( mem,pc);
         idy = idy.wrapping_add(self.y as u16);
         self.pc+=2;
         self.cycles+=3;
         idy
     }
-    fn relative(&mut self){
+    fn relative(&mut self, mem:&mut [u8]){
         match self.instruction.xx(){
-            0 => if self.s.get_negative() == self.instruction.y() {self.branch()},
-            1 => if self.s.get_overflow() == self.instruction.y() {self.branch()},
-            2 => if self.s.get_carry() == self.instruction.y() {self.branch()},
-            3 => if self.s.get_zero() == self.instruction.y() {self.branch()},
+            0 => if self.s.get_negative() == self.instruction.y() {self.branch(mem)},
+            1 => if self.s.get_overflow() == self.instruction.y() {self.branch(mem)},
+            2 => if self.s.get_carry() == self.instruction.y() {self.branch(mem)},
+            3 => if self.s.get_zero() == self.instruction.y() {self.branch(mem)},
             _ =>{},
         };
         self.pc+=1;
     }
-    fn branch(&mut self) {
+    fn branch(&mut self, mem:&mut [u8]) {
         let pc = self.pc;
-        let offset = self.mem.load8(pc)as i8;
+        let offset = self.load8(mem, pc)as i8;
         self.pc = (self.pc as i32).wrapping_add(offset as i32) as u16;
         if (pc/256)!=(self.pc/256) {
             self.cycles+=2;
         }
         self.cycles+=1;
     }
-    fn ORA(&mut self){
+    fn ORA(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let m = self.mem.load8(addr.unwrap());
+        let m = self.load8(mem, addr.unwrap());
         let a = self.a|m;
         self.set_flags_z_n(a);
         self.a = a;
     }
-    fn AND(&mut self){
+    fn AND(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let m = self.mem.load8(addr.unwrap());
+        let m = self.load8(mem, addr.unwrap());
         let a= self.a&m;
         self.set_flags_z_n(a);
         self.a = a;
     }
-    fn EOR(&mut self){
+    fn EOR(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let m = self.mem.load8(addr.unwrap());
+        let m = self.load8(mem, addr.unwrap());
         let a = self.a^m;
         self.a = a;
         self.set_flags_z_n(a);
     }
-    fn ADC(&mut self){
+    fn ADC(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let m = self.mem.load8(addr.unwrap()) as i8;
+        let m = self.load8(mem, addr.unwrap()) as i8;
         let c = self.s.get_carry() as i8;
         let (mc,o) = m.overflowing_add(c);
         let (_,c) = (self.a as i8).overflowing_add(mc);
@@ -339,26 +358,26 @@ impl Cpu{
         self.a = a as u8;
         self.set_flags_z_n_c_o(a,o,c);
     }
-    fn STA(&mut self){
+    fn STA(&mut self, mem:&mut [u8]){
         let addr = self.addr;
         let a = self.a;
-        self.mem.store8(addr.unwrap(),a);
+        self.store8(mem, addr.unwrap(),a);
     }
-    fn LDA(&mut self){
+    fn LDA(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let val = self.mem.load8(addr.unwrap());
+        let val = self.load8(mem, addr.unwrap());
         self.set_flags_z_n(val);
         self.a = val;
     }
-    fn CMP(&mut self){
+    fn CMP(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let val = self.mem.load8(addr.unwrap());
+        let val = self.load8(mem, addr.unwrap());
         let (res,o) = self.a.overflowing_sub(val);
         self.set_flags_z_n_c(res,!o);
     }
-    fn SBC(&mut self){
+    fn SBC(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let m = self.mem.load8(addr.unwrap());
+        let m = self.load8(mem, addr.unwrap());
         let cf = self.s.get_carry() as u8;
         let (mc,o) = (self.a as i8).overflowing_sub(m as i8);
         let (_,of) = mc.overflowing_sub(1-cf as i8);
@@ -369,12 +388,12 @@ impl Cpu{
         self.a = a as u8;
         self.set_flags_z_n_c_o(a,o,c);
     }
-    fn ASL(&mut self){
+    fn ASL(&mut self, mem:&mut [u8]){
         if let Some(addr) = self.addr{
-            let mut m = self.mem.load8(addr);
+            let mut m = self.load8(mem, addr);
             let m2 = m;
             m = m<<1;
-            self.mem.store8(addr,m);
+            self.store8(mem, addr,m);
             self.set_flags_z_n_c(m,m2&0x80==0x80);
         }else{
             let a1 = self.a<<1;
@@ -383,13 +402,13 @@ impl Cpu{
             self.set_flags_z_n_c(a1,a2&0x80==0x80);
         }
     }
-    fn ROL(&mut self){
+    fn ROL(&mut self, mem:&mut [u8]){
         if let Some(addr) = self.addr{
-            let m = self.mem.load8(addr);
+            let m = self.load8(mem, addr);
             let m2 = m;
             let (m,_) = m.overflowing_mul(2);
             let (m,_) = m.overflowing_add(self.s.get_carry() as u8);
-            self.mem.store8(addr,m);
+            self.store8(mem, addr,m);
             self.set_flags_z_n_c(m,m2&0x80==0x80);
         }else{
             let (a1,_) = self.a.overflowing_mul(2);
@@ -399,12 +418,12 @@ impl Cpu{
             self.set_flags_z_n_c(a1,a2&0x80==0x80);
         }
     }
-    fn LSR(&mut self){
+    fn LSR(&mut self, mem:&mut [u8]){
         if let Some(addr) = self.addr{
-            let mut m = self.mem.load8(addr);
+            let mut m = self.load8(mem, addr);
             let m2 = m;
             m = m>>1;
-            self.mem.store8(addr,m);
+            self.store8(mem, addr,m);
             self.set_flags_z_n_c(m,m2&1==1);
         }else{
             let a1 = self.a>>1;
@@ -413,12 +432,12 @@ impl Cpu{
             self.set_flags_z_n_c(a1,a2&1==1);
         }
     }
-    fn ROR(&mut self){
+    fn ROR(&mut self, mem:&mut [u8]){
         if let Some(addr) = self.addr{
-            let mut m = self.mem.load8(addr);
+            let mut m = self.load8(mem, addr);
             let m2 = m;
             m = m/2 + ((self.s.get_carry() as u8) << 7);
-            self.mem.store8(addr,m);
+            self.store8(mem, addr,m);
             self.set_flags_z_n_c(m,m2&1==1);
         }else{
             let a1 = self.a/2 + ((self.s.get_carry() as u8) << 7);
@@ -427,203 +446,203 @@ impl Cpu{
             self.set_flags_z_n_c(a1 as u8,a2&1==1);
         }
     }
-    fn STX(&mut self){
+    fn STX(&mut self, mem:&mut [u8]){
         if let Some(addr) = self.addr{
             let x = self.x;
-            self.mem.store8(addr, x);
+            self.store8(mem, addr, x);
         }
     }
-    fn LDX(&mut self){
+    fn LDX(&mut self, mem:&mut [u8]){
         if let Some(addr) = self.addr{
-        let val = self.mem.load8(addr);
+        let val = self.load8(mem, addr);
         self.set_flags_z_n(val);
         self.x = val;
         }
     }
-    fn DEC(&mut self){
+    fn DEC(&mut self, mem:&mut [u8]){
         if let Some(addr) = self.addr{
-            let m = self.mem.load8(addr).wrapping_sub(1);
-            self.mem.store8(addr,m);
+            let m = self.load8(mem, addr).wrapping_sub(1);
+            self.store8(mem, addr,m);
             self.set_flags_z_n(m);
         }
     }
-    fn INC(&mut self){
+    fn INC(&mut self, mem:&mut [u8]){
         if let Some(addr) = self.addr{
-            let m = self.mem.load8(addr).wrapping_add(1);
-            self.mem.store8(addr,m);
+            let m = self.load8(mem, addr).wrapping_add(1);
+            self.store8(mem, addr,m);
             self.set_flags_z_n(m);
         }
     }
-    fn BIT(&mut self){
+    fn BIT(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let m = self.mem.load8(addr.unwrap());
+        let m = self.load8(mem, addr.unwrap());
         let res = self.a&m;
         self.set_flags_z_n_o(res,m);
     }
-    fn JMP(&mut self){ 
+    fn JMP(&mut self, mem:&mut [u8]){ 
         self.pc = self.addr.unwrap();
     }
-    fn JMI(&mut self){
+    fn JMI(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let valL = self.mem.load8(addr.unwrap());
+        let valL = self.load8(mem, addr.unwrap());
         let addrH = self.addr.unwrap() & 0xFF00;
         let addrL = self.addr.unwrap() as u8;
         let addr = addrH | addrL.wrapping_add(1) as u16; 
-        let valH = self.mem.load8(addr);
+        let valH = self.load8(mem, addr);
         self.pc = valL as u16 | (valH as u16)<<8;
     }
-    fn STY(&mut self){
+    fn STY(&mut self, mem:&mut [u8]){
         let y = self.y;
         let addr = self.addr;
-        self.mem.store8(addr.unwrap(),y);
+        self.store8(mem, addr.unwrap(),y);
     }
-    fn LDY(&mut self){
+    fn LDY(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let m = self.mem.load8(addr.unwrap());
+        let m = self.load8(mem, addr.unwrap());
         self.y = m;
         self.set_flags_z_n(m);
     }
-    fn CPY(&mut self){
+    fn CPY(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let val = self.mem.load8(addr.unwrap());
+        let val = self.load8(mem, addr.unwrap());
         let y = self.y;
         let (res,o) = y.overflowing_sub(val);
         self.set_flags_z_n_c(res,!o);
     }
-    fn CPX(&mut self){
+    fn CPX(&mut self, mem:&mut [u8]){
         let addr = self.addr;
-        let val = self.mem.load8(addr.unwrap());
+        let val = self.load8(mem, addr.unwrap());
         let x = self.x;
         let (res,o) = x.overflowing_sub(val);
         self.set_flags_z_n_c(res,!o);
     }
-    fn BRK(&mut self){
+    fn BRK(&mut self, mem:&mut [u8]){
         self.cycles+=5;
-        self.irq();
+        self.irq(mem);
     }
-    fn JSR(&mut self){
+    fn JSR(&mut self, mem:&mut [u8]){
         self.sp = self.sp.wrapping_sub(2);
         let sp = self.sp as u16 + 0x100;
         let pc = self.pc-1;
-        self.mem.store16(sp+1, pc);
+        self.store16( mem,sp+1, pc);
         self.pc = self.addr.unwrap();
         self.cycles+=2;
     }
-    fn RTI(&mut self){
+    fn RTI(&mut self, mem:&mut [u8]){
         self.in_nmi = false;
         self.cycles+=4;
         let sp = self.sp as u16 + 0x100;
-        let s = self.mem.load8(sp+1);
+        let s = self.load8(mem, sp+1);
         self.s.set(s);        
-        self.pc = self.mem.load16(sp + 2);
+        self.pc = self.load16( mem,sp + 2);
         self.sp = self.sp.wrapping_add(2);
         self.cycles+=4;
     }
-    fn RTS(&mut self){
+    fn RTS(&mut self, mem:&mut [u8]){
         self.cycles+=4;
         let sp = self.sp as u16 + 0x100;
-        self.pc = self.mem.load16(sp+1)+1;
+        self.pc = self.load16( mem,sp+1)+1;
         self.sp = self.sp.wrapping_add(2);
     }
-    fn PHP(&mut self){
+    fn PHP(&mut self, mem:&mut [u8]){
         self.sp = self.sp.wrapping_sub(1);
         let sp = self.sp as u16 + 0x100;
         let s = self.s.get();
-        self.mem.store8(sp+1, s);
+        self.store8(mem, sp+1, s);
         self.cycles+=1;
     }
-    fn PLP(&mut self){
+    fn PLP(&mut self, mem:&mut [u8]){
         let sp:u16 = self.sp as u16 + 0x100;
-        let p = self.mem.load8(sp+1);
+        let p = self.load8(mem, sp+1);
         self.s.set(p);
         self.sp = self.sp.wrapping_add(1);
         self.cycles+=2;
     }
-    fn PHA(&mut self){
+    fn PHA(&mut self, mem:&mut [u8]){
         self.sp = self.sp.wrapping_sub(1);
         let a = self.a;
         let sp = self.sp as u16 + 0x100;
-        self.mem.store8(sp+1, a);
+        self.store8(mem, sp+1, a);
         self.cycles+=1;
     }
-    fn PLA(&mut self){
+    fn PLA(&mut self, mem:&mut [u8]){
         let sp = self.sp as u16 + 0x100;
-        let a = self.mem.load8(sp+1); 
+        let a = self.load8(mem, sp+1); 
         self.a = a;
         self.sp = self.sp.wrapping_add(1);
         self.set_flags_z_n(a);
         self.cycles+=2;
     }
-    fn DEY(&mut self){
+    fn DEY(&mut self, mem:&mut [u8]){
         let y = self.y.wrapping_sub(1);
         self.y = y;
         self.set_flags_z_n(y);
     }
-    fn TAY(&mut self){
+    fn TAY(&mut self, mem:&mut [u8]){
         let a = self.a;
         self.y = a;
         self.set_flags_z_n(a);
     }
-    fn INY(&mut self){
+    fn INY(&mut self, mem:&mut [u8]){
         let y = self.y.wrapping_add(1);
         self.y = y;
         self.set_flags_z_n(y);
     }
-    fn INX(&mut self){
+    fn INX(&mut self, mem:&mut [u8]){
         let x = self.x.wrapping_add(1);
         self.x = x;
         self.set_flags_z_n(x);
     }
-    fn CLC(&mut self){
+    fn CLC(&mut self, mem:&mut [u8]){
         self.s.set_carry(false);
     }
-    fn SEC(&mut self){
+    fn SEC(&mut self, mem:&mut [u8]){
         self.s.set_carry(true);
     }
-    fn CLI(&mut self){
+    fn CLI(&mut self, mem:&mut [u8]){
         self.s.set_interrupt(false);
     }
-    fn SEI(&mut self){
+    fn SEI(&mut self, mem:&mut [u8]){
         self.s.set_interrupt(true);
     }
-    fn TYA(&mut self){
+    fn TYA(&mut self, mem:&mut [u8]){
         let y = self.y;
         self.a = y;
         self.set_flags_z_n(y);
     }
-    fn CLV(&mut self){
+    fn CLV(&mut self, mem:&mut [u8]){
         self.s.set_overflow(false);
     }
-    fn CLD(&mut self){
+    fn CLD(&mut self, mem:&mut [u8]){
         self.s.set_decimal(false);
     }
-    fn SED(&mut self){
+    fn SED(&mut self, mem:&mut [u8]){
         self.s.set_decimal(true);
     }
-    fn TXA(&mut self){
+    fn TXA(&mut self, mem:&mut [u8]){
         let x = self.x;
         self.a = x;
         self.set_flags_z_n(x);
     }
-    fn TXS(&mut self){
+    fn TXS(&mut self, mem:&mut [u8]){
         self.sp = self.x;
     }
-    fn TAX(&mut self){
+    fn TAX(&mut self, mem:&mut [u8]){
         let a = self.a;
         self.x = a;
         self.set_flags_z_n(a);
     }
-    fn TSX(&mut self){
+    fn TSX(&mut self, mem:&mut [u8]){
         let s = self.sp;
         self.x = s;
         self.set_flags_z_n(s);
     }
-    fn DEX(&mut self){
+    fn DEX(&mut self, mem:&mut [u8]){
         let x = self.x.wrapping_sub(1);
         self.x = x;
         self.set_flags_z_n(x);
     }
-    fn NOP(&mut self){}
+    fn NOP(&mut self, mem:&mut [u8]){}
     fn set_flags_z_n(&mut self,res:u8){
         self.s.set_zero(res == 0);
         self.s.set_negative(res & 0x80 == 0x80 );

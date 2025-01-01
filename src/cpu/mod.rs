@@ -202,7 +202,7 @@ impl Cpu{
     }
     fn addressing0(&mut self, mem:&mut [u8]) -> Option<u16>{
         match self.instruction.bbb() {
-            0 => Some(self.immediate(mem)),
+            0 => Some(self.immediate()),
             1 => Some(self.zero_page(mem)),
             3 => Some(self.absolute(mem)),
             4 => None,
@@ -215,7 +215,7 @@ impl Cpu{
         self.addr = Some(match self.instruction.bbb() {
             0 => self.indexed_indirect(mem),
             1 => self.zero_page(mem),
-            2 => self.immediate(mem),
+            2 => self.immediate(),
             3 => self.absolute(mem),
             4 => self.indirect_indexed(mem),
             5 => self.zero_page_r(mem),
@@ -226,7 +226,7 @@ impl Cpu{
     }
     fn addressing2(&mut self, mem:&mut [u8]){
         self.addr = match self.instruction.bbb() {
-            0 => Some(self.immediate(mem)),
+            0 => Some(self.immediate()),
             1 => Some(self.zero_page(mem)),
             2 => None,
             3 => Some(self.absolute(mem)),
@@ -256,7 +256,7 @@ impl Cpu{
         self.cycles+=4;
         ixid
     }
-    fn immediate(&mut self, mem:&mut [u8]) -> u16 {
+    fn immediate(&mut self) -> u16 {
         self.pc+=1;
         self.pc - 1
     }
@@ -479,7 +479,7 @@ impl Cpu{
         let res = self.a&m;
         self.set_flags_z_n_o(res,m);
     }
-    fn JMP(&mut self, mem:&mut [u8]){ 
+    fn JMP(&mut self, mem:&mut [u8]){
         self.pc = self.addr.unwrap();
     }
     fn JMI(&mut self, mem:&mut [u8]){

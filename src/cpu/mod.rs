@@ -6,8 +6,8 @@ mod flags;
 use self::flags::Flags;
 use self::instruction::Instruction;
 use States::*;
-
-use log::trace;
+#[cfg(feature = "logging")]
+use log::*;
 
 #[derive(PartialEq, Clone, Copy, Eq)]
 enum States{

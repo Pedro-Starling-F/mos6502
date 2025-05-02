@@ -1,7 +1,8 @@
+#![cfg_attr(not(feature = "std"), no_std)]
 pub mod cpu;
 pub use cpu::Cpu;
 
-#[cfg(test)]
+#[cfg(feature = "std")]
 mod test{
     use core::ops::{Index, IndexMut};
     pub struct Memory{

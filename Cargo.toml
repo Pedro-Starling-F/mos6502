@@ -23,4 +23,5 @@ optional = true
 
 [features]
 default = ["logging"]
+std = []
 logging = ["dep:log", "dep:simple_logger"]

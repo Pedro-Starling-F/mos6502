@@ -18,8 +18,8 @@ enum States{
 
 #[derive(Clone)]
 pub struct Cpu{
-    #[cfg(feature = "logging")]
-    pub log_line: String,
+    //#[cfg(feature = "logging")]
+    //pub log_line: String,
     pub a: u8,
     pub x: u8,
     pub y: u8,
@@ -43,8 +43,8 @@ impl Cpu{
             i_pc = 0;
         }
         Cpu{
-            #[cfg(feature = "logging")]
-            log_line: "".to_string(),
+            //#[cfg(feature = "logging")]
+            //log_line: "".to_string(),
             a: 0,
             x: 0,
             y: 0,
@@ -123,7 +123,7 @@ impl Cpu{
         self.pc+=1;
         self.cycles+=1;
         self.instruction.set(val);
-        self.log_line = format!("{:04X}  {:02X}                                        A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{:}\n",pc,val,self.a,self.x,self.y,self.s.get(),self.sp, self.cycles);
+        //self.log_line = format!("{:04X}  {:02X}                                        A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{:}\n",pc,val,self.a,self.x,self.y,self.s.get(),self.sp, self.cycles);
         //trace!("{:04X}  {:02X}        A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{:08X}",pc,val,self.a,self.x,self.y,self.s.get(),self.sp, self.cycles);
     }
     fn decode(&mut self, mem: &mut dyn IndexMut<u16, Output=u8>)->fn(&mut Cpu,  &mut dyn IndexMut<u16, Output=u8>){

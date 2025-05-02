@@ -106,7 +106,7 @@ impl Cpu{
         self.pc = reset;
     }
     pub fn run(&mut self, mem: &mut dyn IndexMut<u16, Output=u8>)->usize{
-        //self.cycles = 0;
+        self.cycles = 0;
         match self.states{
             Fetch => {self.fetch(mem);
                       self.states = Decode;},

@@ -55,7 +55,7 @@ mod test{
                 .map(String::from)  // make each slice into a string
                 .collect();
         let mut log_file = fs::File::create("log.txt").unwrap();
-        
+
         let path = "nestest.nes";
         // let file = fs::read(args[1].clone()).unwrap();
         let file = fs::read(path).unwrap();
@@ -80,8 +80,8 @@ mod test{
                     0..8 => s == c,
                     8..49 => true,
                     49..74 => s == c,
-                    74..95=> true,
-                    95.. => unreachable!(),
+                    74..85 => true,
+                    85.. => s == c,
                 }{
                     panic!("{}, \n{}", correct_log_lines[i], log_line);
                 }

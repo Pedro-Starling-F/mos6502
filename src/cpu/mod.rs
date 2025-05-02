@@ -101,6 +101,7 @@ impl Cpu{
         mem[sp] = s;
     }
     pub fn start(&mut self, mem: &mut dyn IndexMut<u16, Output=u8>){
+        self.cycles += 6;
         let reset: u16 = self.load16(mem,0xFFFC);
         self.pc = reset;
     }
@@ -122,7 +123,7 @@ impl Cpu{
         self.pc+=1;
         self.cycles+=1;
         self.instruction.set(val);
-        self.log_line = format!("{:04X}  {:02X}                                        A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{:08}\n",pc,val,self.a,self.x,self.y,self.s.get(),self.sp, self.cycles);
+        self.log_line = format!("{:04X}  {:02X}                                        A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{:}\n",pc,val,self.a,self.x,self.y,self.s.get(),self.sp, self.cycles);
         //trace!("{:04X}  {:02X}        A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{:08X}",pc,val,self.a,self.x,self.y,self.s.get(),self.sp, self.cycles);
     }
     fn decode(&mut self, mem: &mut dyn IndexMut<u16, Output=u8>)->fn(&mut Cpu,  &mut dyn IndexMut<u16, Output=u8>){
@@ -156,7 +157,7 @@ impl Cpu{
             0xEA => Cpu::NOP,
             0x04 | 0x44 | 0x64 => {self.pc += 1; Cpu::NOP},
             0x0C => {self.pc += 2; Cpu::NOP},
-            
+
             0xF8 => Cpu::SED,
             _ => match self.instruction.cc() {
                 0 =>{

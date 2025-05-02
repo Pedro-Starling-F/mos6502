@@ -13,9 +13,14 @@ crate-type = ["cdylib", "rlib"]
 opt-level = "s"
 lto = true
 
+[dependencies.simple_logger]
+version = "5.0.0"
+optional = true
+
 [dependencies.log]
-version = "0.4.22"
+version = "0.4.27"
 optional = true
 
 [features]
-logging  =["dep:log"]
+default = ["logging"]
+logging = ["dep:log", "dep:simple_logger"]

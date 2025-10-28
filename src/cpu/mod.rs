@@ -105,7 +105,7 @@ impl Cpu{
         let reset: u16 = self.load16(mem,0xFFFC);
         self.pc = reset;
     }
-    pub fn run(&mut self, mem: &mut dyn IndexMut<u16, Output=u8>)->usize{
+    pub fn run(&mut self, mem: &mut dyn IndexMut<u16, Output=u8>)->isize{
         self.cycles = 0;
         match self.states{
             Fetch => {self.fetch(mem);
@@ -672,4 +672,5 @@ impl Cpu{
         self.s.set_overflow(m & 0x40 == 0x40);
     }
 }
+
 

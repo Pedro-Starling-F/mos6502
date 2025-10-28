@@ -27,7 +27,7 @@ pub struct Cpu{
     pub sp: u8,
     pub pc: u16,
     pub addr: Option<u16>,
-    pub cycles: usize,
+    pub cycles: isize,
     pub in_nmi:bool,
     pub instruction: Instruction,
     states:States,
@@ -672,3 +672,4 @@ impl Cpu{
         self.s.set_overflow(m & 0x40 == 0x40);
     }
 }
+

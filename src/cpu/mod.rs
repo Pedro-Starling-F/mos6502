@@ -3,20 +3,21 @@
 mod instruction;
 mod flags;
 use core::ops::{IndexMut, Index};
+use core::cmp::{PartialEq, Eq};
 use self::flags::Flags;
 use self::instruction::Instruction;
 use States::*;
 #[cfg(feature = "logging")]
 use log::*;
 
-#[derive(PartialEq, Clone, Copy, Eq)]
+#[derive(PartialEq, Clone, Copy, Eq,  Ord, PartialOrd, Debug)]
 enum States{
     Fetch,
     Decode,
     Execute,
 }
 
-#[derive(Clone)]
+#[derive(Clone,Ord, PartialOrd, Debug)]
 pub struct Cpu{
     //#[cfg(feature = "logging")]
     //pub log_line: String,
@@ -33,8 +34,31 @@ pub struct Cpu{
     states:States,
     current_instr:fn(&mut Cpu,  &mut dyn IndexMut<u16, Output=u8>),
 }
-
+impl PartialEq for Cpu {
+    fn eq(&self, other: &Cpu) -> bool {
+        self.a == other.a && self.x == other.x && self.y == other.y && self.s == other.s && self.sp == other.sp && self.pc == other.pc
+    }
+}
+impl Eq for Cpu {}
 impl Cpu{
+    pub fn new_test(pc:u16,s:u8,a:u8,x:u8,y:u8,p:u8)-> Cpu{
+        let mut status = Flags::new();
+        status.set(p);
+        Cpu{
+            a,
+            x,
+            y,
+            s:status,
+            sp:s,
+            pc,
+            addr: None,
+            cycles:0,
+            in_nmi:false,
+            instruction:Instruction(0xEA),
+            states: Fetch,
+            current_instr:Cpu::NOP
+        }
+    }
     pub fn new(init_pc:Option<u16>) -> Cpu {
         let i_pc:u16;
         if let Some(pc) = init_pc {
@@ -104,6 +128,15 @@ impl Cpu{
         self.cycles += 6;
         let reset: u16 = self.load16(mem,0xFFFC);
         self.pc = reset;
+    }
+    pub fn run_instr(&mut self, mem: &mut dyn IndexMut<u16, Output=u8>){
+        let pc = self.pc;
+        let val = mem[pc];
+        self.pc+=1;
+        self.instruction.set(val);
+        self.current_instr = self.decode(mem);
+        (self.current_instr)(self, mem);
+        //self.cycles+=1;
     }
     pub fn run(&mut self, mem: &mut dyn IndexMut<u16, Output=u8>)->isize{
         self.cycles = 0;
@@ -528,7 +561,16 @@ impl Cpu{
     }
     fn BRK(&mut self, mem: &mut dyn IndexMut<u16, Output=u8>){
         self.cycles+=5;
-        self.irq(mem);
+        self.sp = self.sp.wrapping_sub(2);
+        let sp = self.sp as u16 + 0x100;
+        let pc = self.pc;
+        self.store16(mem, sp, pc);
+        self.pc = self.load16(mem, 0xFFFE);
+        self.sp = self.sp.wrapping_sub(1);
+        let sp = self.sp as u16 + 0x100;
+        let s = self.s.get() | 0b00110100;
+        self.s.set_interrupt(true);
+        mem[sp] = s;
     }
     fn JSR(&mut self, mem: &mut dyn IndexMut<u16, Output=u8>){
         self.sp = self.sp.wrapping_sub(2);

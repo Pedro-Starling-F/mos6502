@@ -1,4 +1,4 @@
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, Ord, PartialOrd, Eq)]
 pub struct Instruction(pub u8);
 impl Instruction {
     pub fn get(&self) -> u8 {

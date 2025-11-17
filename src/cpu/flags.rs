@@ -1,4 +1,4 @@
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Debug)]
 pub struct Flags(u8);
 impl Flags {
     pub fn new() -> Flags {

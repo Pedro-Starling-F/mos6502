@@ -1,16 +1,18 @@
-#![cfg_attr(not(feature = "std"), no_std)]
+//#![cfg_attr(not(feature = "std"), no_std)]
 pub mod cpu;
 pub use cpu::Cpu;
+
+mod tests;
 
 #[cfg(feature = "std")]
 mod test{
     use core::ops::{Index, IndexMut};
-    pub struct Memory{
+    pub struct NesMemory{
         pub ram: [u8;2048],
         pub rom: [u8;16384],
         pub dummy: u8
     }
-    impl Index<u16> for Memory{
+    impl Index<u16> for NesMemory{
         type Output = u8;
         fn index(&self, index:u16) -> &Self::Output {
             match index {
@@ -23,7 +25,7 @@ mod test{
         }
     }
 
-    impl IndexMut<u16> for Memory{
+    impl IndexMut<u16> for NesMemory{
         fn index_mut(&mut self, index:u16) -> &mut Self::Output{
             let i = index & 0x3FFF;
             match i {
@@ -62,7 +64,7 @@ mod test{
         let file = fs::read(path).unwrap();
         let mut file_array = [0u8;0x4000];
         file_array.copy_from_slice(&file[0x0010..0x4010]);
-        let mut mem = Memory{
+        let mut mem = NesMemory{
             ram: [0;0x0800],
             rom: file_array,
             dummy: 0

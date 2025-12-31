@@ -4,7 +4,7 @@ mod flags;
 mod instruction;
 use self::flags::Flags;
 use self::instruction::Instruction;
-use core::cmp::{Eq, PartialEq};
+use core::cmp::{Eq, PartialEq, Ord, PartialOrd};
 use core::ops::{Index, IndexMut};
 #[cfg(feature = "logging")]
 use log::*;
@@ -17,7 +17,7 @@ enum States {
     Execute,
 }
 
-#[derive(Clone, Ord, PartialOrd, Debug)]
+#[derive(Clone, Debug)]
 pub struct Cpu {
     //#[cfg(feature = "logging")]
     //pub log_line: String,
@@ -88,6 +88,11 @@ impl Cpu {
             current_instr: Cpu::NOP,
         }
     }
+    pub fn load16_instrs(&self, mem: &mut dyn IndexMut<u16, Output = u8>, addr: u16) -> u16{
+        let b0 = mem[addr];
+        let b1 = mem[addr+1];
+        u16::from_le_bytes([b0, b1])
+    }
     pub fn load16(&self, mem: &mut dyn IndexMut<u16, Output = u8>, addr: u16) -> u16 {
         let addr2: u16;
         if addr == 0xFF {
@@ -137,7 +142,7 @@ impl Cpu {
     pub fn run_instr(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         let pc = self.pc;
         let val = mem[pc];
-        self.pc += 1;
+        self.pc = self.pc.wrapping_add(1);
         self.instruction.set(val);
         self.current_instr = self.decode(mem);
         (self.current_instr)(self, mem);
@@ -184,7 +189,19 @@ impl Cpu {
                 self.addr = Some(self.indexed_indirect(mem));
                 Cpu::SLO
             }
+            0x07 => {
+                self.addr = Some(self.zero_page(mem));
+                Cpu::SLO
+            }
+            0x0F => {
+                self.addr = Some(self.absolute(mem));
+                Cpu::SLO
+            }
             0x08 => Cpu::PHP,
+            0x0B => {
+                self.addr = Some(self.immediate());
+                Cpu::ANC
+            }
             0x18 => Cpu::CLC,
             0x20 => {
                 self.addr = Some(self.absolute(mem));
@@ -328,8 +345,8 @@ impl Cpu {
         ixid
     }
     fn immediate(&mut self) -> u16 {
-        self.pc += 1;
-        self.pc - 1
+        self.pc = self.pc.wrapping_add(1);
+        self.pc.wrapping_sub(1)
     }
     fn zero_page(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
         let pc = self.pc;
@@ -356,8 +373,7 @@ impl Cpu {
         }
     }
     fn absolute(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
-        let pc = self.pc;
-        let id = self.load16(mem, pc);
+        let id = self.load16_instrs(mem, self.pc);
         self.pc += 2;
         self.cycles += 2;
         id
@@ -476,8 +492,11 @@ impl Cpu {
         self.a = a as u8;
         self.set_flags_z_n_c_o(a, o, c);
     }
+    //{ "name": "0e 86 ef", "initial": { "pc": 254, "s": 226, "a": 7, "x": 99, "y": 166, "p": 239, "ram": [ [254, 14], [255, 134], [256, 239], [61318, 149], [257, 103]]}, "final": { "pc": 257, "s": 226, "a": 7, "x": 99, "y": 166, "p": 109, "ram": [ [254, 14], [255, 134], [256, 239], [257, 103], [61318, 42]]}, "cycles": [ [254, 14, "read"], [255, 134, "read"], [256, 239, "read"], [61318, 149, "read"], [61318, 149, "write"], [61318, 42, "write"]] },
+
     fn ASL(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         if let Some(addr) = self.addr {
+            //println!("addr: {:x}", addr);
             let mut m = mem[addr];
             let m2 = m;
             m = m << 1;
@@ -743,14 +762,21 @@ impl Cpu {
     fn NOP(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {}
     fn SLO(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         let addr = self.addr.unwrap();
-        let (m, o) = (mem[addr]).overflowing_shl(1);
+        let m2 = mem[addr];
+        let m = mem[addr] << 1;
         self.a |= m;
         mem[addr] = self.a;
-        self.set_flags_z_n_c(self.a, o);
+        self.set_flags_z_n_c(self.a, m2 & 0x80 == 0x80);
+    }
+    fn ANC(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        let addr = self.addr.unwrap();
+        let m = mem[addr];
+        self.a &= m;
+        self.set_flags_z_n_c(self.a, self.a & 0x80 == 0x80);
     }
     fn set_flags_z_n(&mut self, res: u8) {
         self.s.set_zero(res == 0);
-        self.s.set_negative(res & 0x80 == 0x80);
+        self.s.set_negative((res & 0x80) == 0x80);
     }
 
     fn set_flags_z_n_c(&mut self, res: u8, o: bool) {

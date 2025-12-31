@@ -8,10 +8,10 @@ impl Instruction {
         self.0 = f;
     }
     pub fn aaa(&self) -> u8 {
-        (self.0 >> 5) & 0b00000111
+        (self.0 & 0b11100000) >> 5
     }
     pub fn bbb(&self) -> u8 {
-        (self.0 >> 2) & 0b00000111
+        (self.0 &  0b00011100) >> 2
     }
     pub fn cc(&self) -> u8 {
         self.0 & 0b00000011

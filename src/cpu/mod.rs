@@ -46,7 +46,7 @@ impl PartialEq for Cpu {
 }
 impl Eq for Cpu {}
 impl Cpu {
-    pub fn new_test(pc: u16, s: u8, a: u8, x: u8, y: u8, p: u8) -> Cpu {
+    pub fn new_test(pc: u16, sp: u8, a: u8, x: u8, y: u8, p: u8) -> Cpu {
         let mut status = Flags::new();
         status.set(p);
         Cpu {
@@ -54,7 +54,7 @@ impl Cpu {
             x,
             y,
             s: status,
-            sp: s,
+            sp,
             pc,
             addr: None,
             cycles: 0,
@@ -90,7 +90,8 @@ impl Cpu {
     }
     pub fn load16_instrs(&self, mem: &mut dyn IndexMut<u16, Output = u8>, addr: u16) -> u16{
         let b0 = mem[addr];
-        let b1 = mem[addr+1];
+        let addrp1 =addr.wrapping_add(1);
+        let b1 = mem[addrp1];
         u16::from_le_bytes([b0, b1])
     }
     pub fn pop_load16(&self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16{
@@ -269,9 +270,49 @@ impl Cpu {
                 Cpu::RLA
             }
             0x40 => Cpu::RTI,
+            0x43 => {
+                self.addr = Some(self.indexed_indirect_x(mem));
+                Cpu::SRE
+            }
+            0x47 =>{
+                self.addr = Some(self.zero_page(mem));
+                Cpu::SRE
+            }
             0x48 => Cpu::PHA,
+            0x4B => {
+                self.addr = Some(self.immediate());
+                Cpu::ALR
+            },
+            0x4F =>{
+                self.addr = Some(self.absolute(mem));
+                Cpu::SRE
+            }
+            0x53 => {
+                self.addr = Some(self.indirect_indexed_y(mem));
+                Cpu::SRE
+            }
+            0x57 => {
+                self.addr = Some(self.zero_page_r(mem));
+                Cpu::SRE
+            }
             0x58 => Cpu::CLI,
+            0x5B => {
+                self.addr = Some(self.absolute_y(mem));
+                Cpu::SRE
+            }
+            0x5D => {
+                self.addr = Some(self.absolute_x(mem));
+                Cpu::EOR
+            }
+            0x5F => {
+                self.addr = Some(self.absolute_x(mem));
+                Cpu::SRE
+            }
             0x60 => Cpu::RTS,
+            0x61 => {
+                self.addr = Some(self.indexed_indirect_x(mem));
+                Cpu::ADC
+            }
             0x68 => Cpu::PLA,
             0x78 => Cpu::SEI,
             0x88 => Cpu::DEY,
@@ -286,12 +327,12 @@ impl Cpu {
             0xCA => Cpu::DEX,
             0xD8 => Cpu::CLD,
             0xE8 => Cpu::INX,
-            0xEA | 0x1A | 0x3A => Cpu::NOP,
-            0x04 | 0x14 | 0x34 | 0x44 | 0x64 => {
+            0xEA | 0x1A | 0x3A | 0x5A => Cpu::NOP,
+            0x04 | 0x14 | 0x34 | 0x44 | 0x54 | 0x64 => {
                 self.pc += 1;
                 Cpu::NOP
             }
-            0x0C | 0x1C | 0x3C => {
+            0x0C | 0x1C | 0x3C | 0x5C => {
                 self.pc += 2;
                 Cpu::NOP
             }
@@ -440,15 +481,15 @@ impl Cpu {
     }
     fn absolute(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
         let id = self.load16_instrs(mem, self.pc);
-        self.pc += 2;
+        self.pc = self.pc.wrapping_add(2);
         self.cycles += 2;
         id
     }
     fn absolute_x(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
         let pc = self.pc;
-        let mut idx = self.load16(mem, pc);
+        let mut idx = self.load16_instrs(mem, pc);
         idx =  idx.wrapping_add(self.x as u16);
-        self.pc += 2;
+        self.pc = self.pc.wrapping_add(2);
         self.cycles += 3;
         idx
     }
@@ -511,8 +552,8 @@ impl Cpu {
         self.a = a;
     }
     fn EOR(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        let addr = self.addr;
-        let m = mem[addr.unwrap()];
+        let addr = self.addr.unwrap();
+        let m = mem[addr];
         let a = self.a ^ m;
         self.a = a;
         self.set_flags_z_n(a);
@@ -725,9 +766,12 @@ impl Cpu {
     }
     fn RTS(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         self.cycles += 4;
-        let sp = self.sp as u16 + 0x100;
-        self.pc = self.load16(mem, sp + 1) + 1;
-        self.sp = self.sp.wrapping_add(2);
+        self.sp = self.sp.wrapping_add(1);
+        let pc_lo = mem[self.sp as u16 + 0x100];
+        self.sp = self.sp.wrapping_add(1);
+        let pc_hi = mem[self.sp as u16 + 0x100];
+        self.pc = u16::from_le_bytes([pc_lo, pc_hi]);
+        self.pc = self.pc.wrapping_add(1);
     }
     fn PHP(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         self.sp = self.sp.wrapping_sub(1);
@@ -852,7 +896,22 @@ impl Cpu {
         self.a &= m;
         self.set_flags_z_n_c(self.a, m2 & 0x80 == 0x80);
     }
-
+    fn SRE(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>){
+        let addr = self.addr.unwrap();
+        let m2 = mem[addr];
+        let m = mem[addr] >> 1;
+        self.a ^= m;
+        mem[addr] = m;
+        self.set_flags_z_n_c(self.a, m2 & 0x01 == 0x01);
+    }
+    fn ALR(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>){
+        let imm = mem[self.addr.unwrap()];
+        let imm2 = imm;
+        let a = self.a;
+        self.a &= imm;
+        self.a = self.a >> 1;
+        self.set_flags_z_n_c(self.a,(a & imm) & 0x01 == 0x01);
+    }
     fn set_flags_z_n(&mut self, res: u8) {
         self.s.set_zero(res == 0);
         self.s.set_negative((res & 0x80) == 0x80);

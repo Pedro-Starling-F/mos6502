@@ -121,6 +121,15 @@ impl Cpu {
         mem[addr] = v[0];
         mem[addr + 1] = v[1];
     }
+    pub fn StackPush(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>, val:u8){
+        mem[self.sp as u16 + 0x100] = val;
+        if self.sp == 0x00{
+            self.sp = 0xFF;
+        } else {
+          self.sp -= 1;
+        }
+
+    }
     pub fn irq(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         if !self.s.get_interrupt() {
             self.sp = self.sp.wrapping_sub(2);
@@ -312,6 +321,10 @@ impl Cpu {
             0x61 => {
                 self.addr = Some(self.indexed_indirect_x(mem));
                 Cpu::ADC
+            }
+            0x63 => {
+                self.addr = Some(self.indexed_indirect_x(mem));
+                Cpu::RRA
             }
             0x68 => Cpu::PLA,
             0x78 => Cpu::SEI,
@@ -559,8 +572,16 @@ impl Cpu {
         self.set_flags_z_n(a);
     }
     fn ADC(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        let addr = self.addr;
-        let m = mem[addr.unwrap()] as i8;
+        let addr = self.addr.unwrap();
+        let m = mem[addr] as u16;
+        let tmp = m + self.a as u16  + self.s.get_carry() as u16;
+
+        self.s.set_negative(tmp & 0x80 == 0x80);
+        self.s.set_overflow((!(self.a as u16 ^ m) & 0x80) == 0x80 && ((self.a as u16 ^ tmp) & 0x80) == 0x80);
+        self.s.set_carry(tmp > 0xFF);
+        self.a = tmp as u8;
+        self.s.set_zero(self.a == 0);
+        /*
         let c = self.s.get_carry() as i8;
         let (mc, o) = m.overflowing_add(c);
         let (_, c) = (self.a as i8).overflowing_add(mc);
@@ -568,6 +589,7 @@ impl Cpu {
         let (a, c) = self.a.overflowing_add(mc as u8);
         self.a = a as u8;
         self.set_flags_z_n_c_o(a, o, c);
+        */
     }
     fn STA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         let addr = self.addr;
@@ -733,22 +755,17 @@ impl Cpu {
     }
     fn BRK(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         self.cycles += 5;
-        self.sp = self.sp.wrapping_sub(2);
-        let sp = self.sp as u16 + 0x100;
-        let pc = self.pc;
-        self.store16(mem, sp, pc);
-        self.pc = self.load16(mem, 0xFFFE);
-        self.sp = self.sp.wrapping_sub(1);
-        let sp = self.sp as u16 + 0x100;
-        let s = self.s.get() | 0b00110100;
+        let pc = self.pc.wrapping_add(1);
+        self.StackPush(mem, (pc >> 8) as u8);
+        self.StackPush(mem, pc as u8);
+        self.StackPush(mem, self.s.get() | 0x10);
         self.s.set_interrupt(true);
-        mem[sp] = s;
+        self.pc = self.load16(mem, 0xFFFE);
     }
     fn JSR(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        self.sp = self.sp.wrapping_sub(2);
-        let sp = self.sp as u16 + 0x100;
-        let pc = self.pc - 1;
-        self.store16(mem, sp + 1, pc);
+        let pc = self.pc.wrapping_sub(1);
+        self.StackPush(mem,(pc >> 8) as u8);
+        self.StackPush(mem, pc as u8);
         self.pc = self.addr.unwrap();
         self.cycles += 2;
     }
@@ -774,10 +791,7 @@ impl Cpu {
         self.pc = self.pc.wrapping_add(1);
     }
     fn PHP(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        self.sp = self.sp.wrapping_sub(1);
-        let sp = self.sp as u16 + 0x100;
-        let s = self.s.get() | 0x30;
-        mem[sp + 1] = s;
+        self.StackPush(mem, self.s.get() | 0x10);
         self.cycles += 1;
     }
     fn PLP(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
@@ -788,10 +802,7 @@ impl Cpu {
         self.cycles += 2;
     }
     fn PHA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        self.sp = self.sp.wrapping_sub(1);
-        let a = self.a;
-        let sp = self.sp as u16 + 0x100;
-        mem[sp + 1] = a;
+        self.StackPush(mem,self.a);
         self.cycles += 1;
     }
     fn PLA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
@@ -877,7 +888,7 @@ impl Cpu {
         let m2 = mem[addr];
         let m = mem[addr] << 1;
         self.a |= m;
-        mem[addr] = self.a;
+        mem[addr] = m;
         self.set_flags_z_n_c(self.a, m2 & 0x80 == 0x80);
     }
     fn ANC(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
@@ -911,6 +922,15 @@ impl Cpu {
         self.a &= imm;
         self.a = self.a >> 1;
         self.set_flags_z_n_c(self.a,(a & imm) & 0x01 == 0x01);
+    }
+    fn RRA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>){
+        let addr = self.addr.unwrap();
+        let m2 = mem[addr];
+        let underflow = (m2 & 0x01) << 7;
+        let m = underflow | (mem[addr] >> 1);
+        let tmp = m as u16 + self.a as u16  + self.s.get_carry() as u16;
+        mem[addr] = m;
+        self.set_flags_z_n_c(self.a, m2 & 0x01 == 0x01);
     }
     fn set_flags_z_n(&mut self, res: u8) {
         self.s.set_zero(res == 0);

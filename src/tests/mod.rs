@@ -4,7 +4,9 @@ use core::ops::{Index, IndexMut};
 use single_step::Root2;
 use std::fmt::format;
 use std::fs;
+//use std::slice::range;
 
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
 pub struct Memory {
     pub mem: [u8; 65536],
 }
@@ -32,7 +34,8 @@ impl IndexMut<u16> for Memory {
 pub fn run_tests() {
     for i in 0..0x100 {
         use std::env;
-        let mut memory: Memory = Memory::new();
+        let mut memory_ut: Memory = Memory::new();
+        let mut memory_final: Memory = Memory::new();
         let json_file_path = format!("./65x02/nes6502/v1/{:02x}.json", i);
         println!("{}", json_file_path);
         let file = fs::read(json_file_path).unwrap();
@@ -48,9 +51,9 @@ pub fn run_tests() {
                 test.initial.p as u8,
             );
             for ram_value in test.initial.ram {
-                memory[ram_value[0] as u16] = ram_value[1] as u8;
+                memory_ut[ram_value[0] as u16] = ram_value[1] as u8;
             }
-            cpu_ut.run_instr(&mut memory);
+            cpu_ut.run_instr(&mut memory_ut);
 
             let cpu_final = Cpu::new_test(
                 test.final_field.pc as u16,
@@ -61,7 +64,16 @@ pub fn run_tests() {
                 test.final_field.p as u8,
             );
             for ram_final in test.final_field.ram {
-                memory[ram_final[0] as u16] = ram_final[1] as u8;
+                memory_final[ram_final[0] as u16] = ram_final[1] as u8;
+            }
+            if memory_ut != memory_final{
+                //println!("Memory ut {:?} != Memory final {:?}", memory_ut, memory_final);
+                for ((ut,fin), idx) in (memory_ut.mem.iter().zip(memory_final.mem.iter()).zip(0..0xFFFF)){
+                    if(*ut != *fin){
+                        println!("Memory ut {:x?} != Memory final {:x?} @ addr {:x?}", *ut, *fin, idx);
+                    }
+                }
+                assert!(false);
             }
             //print!("cpu_ut {:#x?}",cpu_ut);
             //print!("cpu_final {:#x?}",cpu_final);

@@ -10,6 +10,42 @@ use core::ops::{Index, IndexMut};
 use log::*;
 use States::*;
 
+// Base cycle count per opcode. Page-crossing penalties for indexed reads and
+// the extra cycles of taken branches are added on top. JAM really halts the CPU;
+// 11 matches what the SingleStepTests suite records for it.
+#[rustfmt::skip]
+const CYCLES: [u8; 256] = [
+//  0  1   2  3  4  5  6  7  8  9  A  B  C  D  E  F
+    7, 6, 11, 8, 3, 3, 5, 5, 3, 2, 2, 2, 4, 4, 6, 6, // 0
+    2, 5, 11, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7, // 1
+    6, 6, 11, 8, 3, 3, 5, 5, 4, 2, 2, 2, 4, 4, 6, 6, // 2
+    2, 5, 11, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7, // 3
+    6, 6, 11, 8, 3, 3, 5, 5, 3, 2, 2, 2, 3, 4, 6, 6, // 4
+    2, 5, 11, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7, // 5
+    6, 6, 11, 8, 3, 3, 5, 5, 4, 2, 2, 2, 5, 4, 6, 6, // 6
+    2, 5, 11, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7, // 7
+    2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4,  // 8
+    2, 6, 11, 6, 4, 4, 4, 4, 2, 5, 2, 5, 5, 5, 5, 5, // 9
+    2, 6, 2, 6, 3, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 4,  // A
+    2, 5, 11, 5, 4, 4, 4, 4, 2, 4, 2, 4, 4, 4, 4, 4, // B
+    2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6,  // C
+    2, 5, 11, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7, // D
+    2, 6, 2, 8, 3, 3, 5, 5, 2, 2, 2, 2, 4, 4, 6, 6,  // E
+    2, 5, 11, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7, // F
+];
+
+// Indexed reads that take one more cycle when the index crosses a page.
+// Stores and read-modify-write instructions always take the fixed count.
+fn has_page_penalty(op: u8) -> bool {
+    matches!(
+        op,
+        0x11 | 0x31 | 0x51 | 0x71 | 0xB1 | 0xD1 | 0xF1 | 0xB3
+            | 0x19 | 0x39 | 0x59 | 0x79 | 0xB9 | 0xD9 | 0xF9 | 0xBB | 0xBE | 0xBF
+            | 0x1C | 0x3C | 0x5C | 0x7C | 0xDC | 0xFC | 0xBC
+            | 0x1D | 0x3D | 0x5D | 0x7D | 0xBD | 0xDD | 0xFD
+    )
+}
+
 #[derive(PartialEq, Clone, Copy, Eq, Ord, PartialOrd, Debug)]
 enum States {
     Fetch,
@@ -95,14 +131,8 @@ impl Cpu {
         u16::from_le_bytes([b0, b1])
     }
     pub fn pop_load16(&self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16{
-        let sp = if self.sp == 0xFF {
-             0x0
-        } else {
-            self.sp+1
-        };
-        let sp = sp as u16 + 0x100;
-        let b0 = mem[sp];
-        let b1 = mem[sp+1];
+        let b0 = mem[self.sp.wrapping_add(1) as u16 + 0x100];
+        let b1 = mem[self.sp.wrapping_add(2) as u16 + 0x100];
         u16::from_le_bytes([b0, b1])
     }
     pub fn load16(&self, mem: &mut dyn IndexMut<u16, Output = u8>, addr: u16) -> u16 {
@@ -119,7 +149,7 @@ impl Cpu {
     pub fn store16(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>, addr: u16, val: u16) {
         let v = val.to_le_bytes();
         mem[addr] = v[0];
-        mem[addr + 1] = v[1];
+        mem[addr.wrapping_add(1)] = v[1];
     }
     pub fn StackPush(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>, val:u8){
         mem[self.sp as u16 + 0x100] = val;
@@ -132,31 +162,25 @@ impl Cpu {
     }
     pub fn irq(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         if !self.s.get_interrupt() {
-            self.sp = self.sp.wrapping_sub(2);
-            let sp = self.sp as u16 + 0x100;
-            let pc = self.pc;
-            self.store16(mem, sp, pc);
-            self.pc = self.load16(mem, 0xFFFE);
-            self.sp = self.sp.wrapping_sub(1);
-            let sp = self.sp as u16 + 0x100;
-            let s = self.s.get();
-            mem[sp] = s;
+            self.interrupt(mem, 0xFFFE);
         }
     }
     pub fn nmi(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         self.in_nmi = true;
-        self.sp = self.sp.wrapping_sub(2);
-        let sp = self.sp as u16 + 0x100;
+        self.interrupt(mem, 0xFFFA);
+    }
+    // hardware interrupts push P with B clear (BRK/PHP push it set)
+    fn interrupt(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>, vector: u16) {
         let pc = self.pc;
-        self.store16(mem, sp, pc);
-        self.pc = self.load16(mem, 0xFFFE);
-        self.sp = self.sp.wrapping_sub(1);
-        let sp = self.sp as u16 + 0x100;
-        let s = self.s.get();
-        mem[sp] = s;
+        self.StackPush(mem, (pc >> 8) as u8);
+        self.StackPush(mem, pc as u8);
+        self.StackPush(mem, (self.s.get() | 0x20) & 0xEF);
+        self.s.set_interrupt(true);
+        self.pc = self.load16(mem, vector);
+        self.cycles += 7;
     }
     pub fn start(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        self.cycles += 6;
+        self.cycles += 7;
         let reset: u16 = self.load16(mem, 0xFFFC);
         self.pc = reset;
     }
@@ -164,6 +188,7 @@ impl Cpu {
         let pc = self.pc;
         let val = mem[pc];
         self.pc = self.pc.wrapping_add(1);
+        self.cycles += 1;
         self.instruction.set(val);
         self.current_instr = self.decode(mem);
         (self.current_instr)(self, mem);
@@ -190,7 +215,7 @@ impl Cpu {
     fn fetch(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         let pc = self.pc;
         let val = mem[pc];
-        self.pc += 1;
+        self.pc = self.pc.wrapping_add(1);
         self.cycles += 1;
         self.instruction.set(val);
         //self.log_line = format!("{:04X}  {:02X}                                        A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{:}\n",pc,val,self.a,self.x,self.y,self.s.get(),self.sp, self.cycles);
@@ -200,7 +225,7 @@ impl Cpu {
         &mut self,
         mem: &mut dyn IndexMut<u16, Output = u8>,
     ) -> fn(&mut Cpu, &mut dyn IndexMut<u16, Output = u8>) {
-        self.cycles += 1;
+        self.cycles += CYCLES[self.instruction.get() as usize] as isize - 1;
         match self.instruction.get() {
             0x00 => Cpu::BRK,
             0x02 | 0x12 | 0x22 | 0x32 | 0x42 | 0x52 | 0x62 | 0x72 | 0x92 | 0xB2 | 0xD2 | 0xF2 => {
@@ -340,14 +365,190 @@ impl Cpu {
             0xCA => Cpu::DEX,
             0xD8 => Cpu::CLD,
             0xE8 => Cpu::INX,
-            0xEA | 0x1A | 0x3A | 0x5A => Cpu::NOP,
-            0x04 | 0x14 | 0x34 | 0x44 | 0x54 | 0x64 => {
-                self.pc += 1;
+            0xEA | 0x1A | 0x3A | 0x5A | 0x7A | 0xDA | 0xFA => Cpu::NOP,
+            0x80 | 0x82 | 0x89 | 0xC2 | 0xE2 => {
+                self.addr = Some(self.immediate());
                 Cpu::NOP
             }
-            0x0C | 0x1C | 0x3C | 0x5C => {
-                self.pc += 2;
+            0x04 | 0x44 | 0x64 => {
+                self.addr = Some(self.zero_page(mem));
                 Cpu::NOP
+            }
+            0x14 | 0x34 | 0x54 | 0x74 | 0xD4 | 0xF4 => {
+                self.addr = Some(self.zero_page_r(mem));
+                Cpu::NOP
+            }
+            0x0C => {
+                self.addr = Some(self.absolute(mem));
+                Cpu::NOP
+            }
+            0x1C | 0x3C | 0x5C | 0x7C | 0xDC | 0xFC => {
+                self.addr = Some(self.absolute_x(mem));
+                Cpu::NOP
+            }
+            0x67 => {
+                self.addr = Some(self.zero_page(mem));
+                Cpu::RRA
+            }
+            0x6B => {
+                self.addr = Some(self.immediate());
+                Cpu::ARR
+            }
+            0x6F => {
+                self.addr = Some(self.absolute(mem));
+                Cpu::RRA
+            }
+            0x73 => {
+                self.addr = Some(self.indirect_indexed_y(mem));
+                Cpu::RRA
+            }
+            0x77 => {
+                self.addr = Some(self.zero_page_r(mem));
+                Cpu::RRA
+            }
+            0x7B => {
+                self.addr = Some(self.absolute_y(mem));
+                Cpu::RRA
+            }
+            0x7F => {
+                self.addr = Some(self.absolute_x(mem));
+                Cpu::RRA
+            }
+            0x83 => {
+                self.addr = Some(self.indexed_indirect_x(mem));
+                Cpu::SAX
+            }
+            0x87 => {
+                self.addr = Some(self.zero_page(mem));
+                Cpu::SAX
+            }
+            0x8B => {
+                self.addr = Some(self.immediate());
+                Cpu::ANE
+            }
+            0x8F => {
+                self.addr = Some(self.absolute(mem));
+                Cpu::SAX
+            }
+            0x93 => {
+                self.addr = Some(self.indirect_indexed_y(mem));
+                Cpu::SHA
+            }
+            0x97 => {
+                self.addr = Some(self.zero_page_y(mem));
+                Cpu::SAX
+            }
+            0x9B => {
+                self.addr = Some(self.absolute_y(mem));
+                Cpu::TAS
+            }
+            0x9C => {
+                self.addr = Some(self.absolute_x(mem));
+                Cpu::SHY
+            }
+            0x9E => {
+                self.addr = Some(self.absolute_y(mem));
+                Cpu::SHX
+            }
+            0x9F => {
+                self.addr = Some(self.absolute_y(mem));
+                Cpu::SHA
+            }
+            0xA3 => {
+                self.addr = Some(self.indexed_indirect_x(mem));
+                Cpu::LAX
+            }
+            0xA7 => {
+                self.addr = Some(self.zero_page(mem));
+                Cpu::LAX
+            }
+            0xAB => {
+                self.addr = Some(self.immediate());
+                Cpu::LXA
+            }
+            0xAF => {
+                self.addr = Some(self.absolute(mem));
+                Cpu::LAX
+            }
+            0xB3 => {
+                self.addr = Some(self.indirect_indexed_y(mem));
+                Cpu::LAX
+            }
+            0xB7 => {
+                self.addr = Some(self.zero_page_y(mem));
+                Cpu::LAX
+            }
+            0xBB => {
+                self.addr = Some(self.absolute_y(mem));
+                Cpu::LAS
+            }
+            0xBF => {
+                self.addr = Some(self.absolute_y(mem));
+                Cpu::LAX
+            }
+            0xC3 => {
+                self.addr = Some(self.indexed_indirect_x(mem));
+                Cpu::DCP
+            }
+            0xC7 => {
+                self.addr = Some(self.zero_page(mem));
+                Cpu::DCP
+            }
+            0xCB => {
+                self.addr = Some(self.immediate());
+                Cpu::SBX
+            }
+            0xCF => {
+                self.addr = Some(self.absolute(mem));
+                Cpu::DCP
+            }
+            0xD3 => {
+                self.addr = Some(self.indirect_indexed_y(mem));
+                Cpu::DCP
+            }
+            0xD7 => {
+                self.addr = Some(self.zero_page_r(mem));
+                Cpu::DCP
+            }
+            0xDB => {
+                self.addr = Some(self.absolute_y(mem));
+                Cpu::DCP
+            }
+            0xDF => {
+                self.addr = Some(self.absolute_x(mem));
+                Cpu::DCP
+            }
+            0xE3 => {
+                self.addr = Some(self.indexed_indirect_x(mem));
+                Cpu::ISC
+            }
+            0xE7 => {
+                self.addr = Some(self.zero_page(mem));
+                Cpu::ISC
+            }
+            0xEB => {
+                self.addr = Some(self.immediate());
+                Cpu::SBC
+            }
+            0xEF => {
+                self.addr = Some(self.absolute(mem));
+                Cpu::ISC
+            }
+            0xF3 => {
+                self.addr = Some(self.indirect_indexed_y(mem));
+                Cpu::ISC
+            }
+            0xF7 => {
+                self.addr = Some(self.zero_page_r(mem));
+                Cpu::ISC
+            }
+            0xFB => {
+                self.addr = Some(self.absolute_y(mem));
+                Cpu::ISC
+            }
+            0xFF => {
+                self.addr = Some(self.absolute_x(mem));
+                Cpu::ISC
             }
 
             0xF8 => Cpu::SED,
@@ -444,8 +645,8 @@ impl Cpu {
         let id = mem[pc];
         let idix = self.load16(mem, id as u16);
         let idixy = idix.wrapping_add(self.y as u16);
-        self.cycles += 4;
-        self.pc += 1;
+        self.page_penalty(idix, idixy);
+        self.pc = self.pc.wrapping_add(1);
         idixy
     }
     fn indexed_indirect_x(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
@@ -454,7 +655,6 @@ impl Cpu {
         let id = mem[pc].wrapping_add(x);
         self.pc = self.pc.wrapping_add(1);
         let ixid = self.load16(mem, id as u16);
-        self.cycles += 4;
         ixid
     }
     fn immediate(&mut self) -> u16 {
@@ -463,7 +663,6 @@ impl Cpu {
     }
     fn zero_page(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
         let pc = self.pc;
-        self.cycles += 1;
         let zp = mem[pc];
         self.pc = self.pc.wrapping_add(1);
         zp as u16
@@ -471,15 +670,13 @@ impl Cpu {
     fn zero_page_r(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
         let pc = self.pc;
         let zpr = mem[pc];
-        self.pc += 1;
-        self.cycles += 2;
+        self.pc = self.pc.wrapping_add(1);
         zpr.wrapping_add(self.x) as u16
     }
     fn zero_page_r2(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
         let pc = self.pc;
         let zpr = mem[pc];
-        self.pc += 1;
-        self.cycles += 2;
+        self.pc = self.pc.wrapping_add(1);
         match self.instruction.aaa() {
             4 | 5 => zpr.wrapping_add(self.y) as u16,
             _ => zpr.wrapping_add(self.x) as u16,
@@ -488,31 +685,36 @@ impl Cpu {
     fn zero_page_y(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
         let pc = self.pc;
         let zpr = mem[pc];
-        self.pc += 1;
-        self.cycles += 2;
+        self.pc = self.pc.wrapping_add(1);
         zpr.wrapping_add(self.y) as u16
     }
     fn absolute(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
         let id = self.load16_instrs(mem, self.pc);
         self.pc = self.pc.wrapping_add(2);
-        self.cycles += 2;
         id
     }
     fn absolute_x(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
         let pc = self.pc;
         let mut idx = self.load16_instrs(mem, pc);
+        let base = idx;
         idx =  idx.wrapping_add(self.x as u16);
+        self.page_penalty(base, idx);
         self.pc = self.pc.wrapping_add(2);
-        self.cycles += 3;
         idx
     }
     fn absolute_y(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) -> u16 {
         let pc = self.pc;
-        let mut idy = self.load16(mem, pc);
+        let mut idy = self.load16_instrs(mem, pc);
+        let base = idy;
         idy = idy.wrapping_add(self.y as u16);
-        self.pc += 2;
-        self.cycles += 3;
+        self.page_penalty(base, idy);
+        self.pc = self.pc.wrapping_add(2);
         idy
+    }
+    fn page_penalty(&mut self, base: u16, addr: u16) {
+        if (base ^ addr) & 0xFF00 != 0 && has_page_penalty(self.instruction.get()) {
+            self.cycles += 1;
+        }
     }
     fn relative(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         match self.instruction.xx() {
@@ -538,16 +740,19 @@ impl Cpu {
             }
             _ => {}
         };
-        self.pc += 1;
+        self.pc = self.pc.wrapping_add(1);
     }
     fn branch(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         let pc = self.pc;
         let offset = mem[pc] as i8;
-        self.pc = (self.pc as i32).wrapping_add(offset as i32) as u16;
-        if (pc / 256) != (self.pc / 256) {
-            self.cycles += 2;
-        }
+        let next = pc.wrapping_add(1);
+        let target = next.wrapping_add(offset as u16);
+        // relative() still adds 1 for the operand byte
+        self.pc = target.wrapping_sub(1);
         self.cycles += 1;
+        if (next ^ target) & 0xFF00 != 0 {
+            self.cycles += 1;
+        }
     }
     fn JAM(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {}
     fn ORA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
@@ -572,24 +777,19 @@ impl Cpu {
         self.set_flags_z_n(a);
     }
     fn ADC(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        let addr = self.addr.unwrap();
-        let m = mem[addr] as u16;
-        let tmp = m + self.a as u16  + self.s.get_carry() as u16;
-
-        self.s.set_negative(tmp & 0x80 == 0x80);
-        self.s.set_overflow((!(self.a as u16 ^ m) & 0x80) == 0x80 && ((self.a as u16 ^ tmp) & 0x80) == 0x80);
-        self.s.set_carry(tmp > 0xFF);
-        self.a = tmp as u8;
-        self.s.set_zero(self.a == 0);
-        /*
-        let c = self.s.get_carry() as i8;
-        let (mc, o) = m.overflowing_add(c);
-        let (_, c) = (self.a as i8).overflowing_add(mc);
-        let o = c || o;
-        let (a, c) = self.a.overflowing_add(mc as u8);
-        self.a = a as u8;
-        self.set_flags_z_n_c_o(a, o, c);
-        */
+        let m = mem[self.addr.unwrap()];
+        self.add_with_carry(m);
+    }
+    // binary-mode add only: the NES 2A03 has no decimal mode
+    fn add_with_carry(&mut self, m: u8) {
+        let tmp = m as u16 + self.a as u16 + self.s.get_carry() as u16;
+        let res = tmp as u8;
+        let o = (!(self.a ^ m) & (self.a ^ res) & 0x80) == 0x80;
+        self.a = res;
+        self.set_flags_z_n_c_o(res, o, tmp > 0xFF);
+    }
+    fn compare(&mut self, reg: u8, m: u8) {
+        self.set_flags_z_n_c(reg.wrapping_sub(m), reg >= m);
     }
     fn STA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         let addr = self.addr;
@@ -609,17 +809,8 @@ impl Cpu {
         self.set_flags_z_n_c(res, !o);
     }
     fn SBC(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        let addr = self.addr;
-        let m = mem[addr.unwrap()];
-        let cf = self.s.get_carry() as u8;
-        let (mc, o) = (self.a as i8).overflowing_sub(m as i8);
-        let (_, of) = mc.overflowing_sub(1 - cf as i8);
-        let (a, c) = self.a.overflowing_sub(m);
-        let (a, cr) = a.overflowing_sub(1 - cf);
-        let o = o || of;
-        let c = !(c || cr);
-        self.a = a as u8;
-        self.set_flags_z_n_c_o(a, o, c);
+        let m = mem[self.addr.unwrap()];
+        self.add_with_carry(!m);
     }
     //{ "name": "0e 86 ef", "initial": { "pc": 254, "s": 226, "a": 7, "x": 99, "y": 166, "p": 239, "ram": [ [254, 14], [255, 134], [256, 239], [61318, 149], [257, 103]]}, "final": { "pc": 257, "s": 226, "a": 7, "x": 99, "y": 166, "p": 109, "ram": [ [254, 14], [255, 134], [256, 239], [257, 103], [61318, 42]]}, "cycles": [ [254, 14, "read"], [255, 134, "read"], [256, 239, "read"], [61318, 149, "read"], [61318, 149, "write"], [61318, 42, "write"]] },
 
@@ -717,7 +908,6 @@ impl Cpu {
     }
     fn JMP(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         self.pc = self.addr.unwrap();
-        self.cycles += 2;
     }
     fn JMI(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         let addr = self.addr;
@@ -754,7 +944,6 @@ impl Cpu {
         self.set_flags_z_n_c(res, !o);
     }
     fn BRK(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        self.cycles += 5;
         let pc = self.pc.wrapping_add(1);
         self.StackPush(mem, (pc >> 8) as u8);
         self.StackPush(mem, pc as u8);
@@ -767,7 +956,6 @@ impl Cpu {
         self.StackPush(mem,(pc >> 8) as u8);
         self.StackPush(mem, pc as u8);
         self.pc = self.addr.unwrap();
-        self.cycles += 2;
     }
     fn RTI(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         self.in_nmi = false;
@@ -779,10 +967,8 @@ impl Cpu {
         self.sp = self.sp.wrapping_add(1);
         let pc_hi = mem[self.sp as u16 + 0x100];
         self.pc = u16::from_le_bytes([pc_lo, pc_hi]);
-        self.cycles += 4;
     }
     fn RTS(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        self.cycles += 4;
         self.sp = self.sp.wrapping_add(1);
         let pc_lo = mem[self.sp as u16 + 0x100];
         self.sp = self.sp.wrapping_add(1);
@@ -792,26 +978,21 @@ impl Cpu {
     }
     fn PHP(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         self.StackPush(mem, self.s.get() | 0x10);
-        self.cycles += 1;
     }
     fn PLP(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         self.sp = self.sp.wrapping_add(1);
         let sp: u16 = self.sp as u16 + 0x100;
         let p = mem[sp];
         self.s.set((p | 0x20) & 0xEF);
-        self.cycles += 2;
     }
     fn PHA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         self.StackPush(mem,self.a);
-        self.cycles += 1;
     }
     fn PLA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        let sp = self.sp as u16 + 0x100;
-        let a = mem[sp + 1];
-        self.a = a;
         self.sp = self.sp.wrapping_add(1);
+        let a = mem[self.sp as u16 + 0x100];
+        self.a = a;
         self.set_flags_z_n(a);
-        self.cycles += 2;
     }
     fn DEY(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         let y = self.y.wrapping_sub(1);
@@ -926,11 +1107,90 @@ impl Cpu {
     fn RRA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>){
         let addr = self.addr.unwrap();
         let m2 = mem[addr];
-        let underflow = (m2 & 0x01) << 7;
-        let m = underflow | (mem[addr] >> 1);
-        let tmp = m as u16 + self.a as u16  + self.s.get_carry() as u16;
+        let m = ((self.s.get_carry() as u8) << 7) | (m2 >> 1);
         mem[addr] = m;
-        self.set_flags_z_n_c(self.a, m2 & 0x01 == 0x01);
+        self.s.set_carry(m2 & 0x01 == 0x01);
+        self.add_with_carry(m);
+    }
+    fn SAX(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        mem[self.addr.unwrap()] = self.a & self.x;
+    }
+    fn LAX(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        let m = mem[self.addr.unwrap()];
+        self.a = m;
+        self.x = m;
+        self.set_flags_z_n(m);
+    }
+    fn LAS(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        let m = mem[self.addr.unwrap()] & self.sp;
+        self.a = m;
+        self.x = m;
+        self.sp = m;
+        self.set_flags_z_n(m);
+    }
+    fn DCP(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        let addr = self.addr.unwrap();
+        let m = mem[addr].wrapping_sub(1);
+        mem[addr] = m;
+        self.compare(self.a, m);
+    }
+    fn ISC(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        let addr = self.addr.unwrap();
+        let m = mem[addr].wrapping_add(1);
+        mem[addr] = m;
+        self.add_with_carry(!m);
+    }
+    fn ARR(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        let a = self.a & mem[self.addr.unwrap()];
+        let a = ((self.s.get_carry() as u8) << 7) | (a >> 1);
+        self.a = a;
+        self.set_flags_z_n(a);
+        self.s.set_carry(a & 0x40 == 0x40);
+        self.s.set_overflow(((a >> 6) ^ (a >> 5)) & 1 == 1);
+    }
+    // ANE and LXA are unstable on real hardware; 0xEE is the constant the test suite uses
+    fn ANE(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        let a = (self.a | 0xEE) & self.x & mem[self.addr.unwrap()];
+        self.a = a;
+        self.set_flags_z_n(a);
+    }
+    fn LXA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        let a = (self.a | 0xEE) & mem[self.addr.unwrap()];
+        self.a = a;
+        self.x = a;
+        self.set_flags_z_n(a);
+    }
+    fn SBX(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        let m = mem[self.addr.unwrap()];
+        let ax = self.a & self.x;
+        self.x = ax.wrapping_sub(m);
+        self.compare(ax, m);
+    }
+    // SHA/SHX/SHY/TAS store reg & (base_high + 1); when indexing crosses a page
+    // that value also replaces the high byte of the effective address
+    fn store_and_high(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>, val: u8, index: u8) {
+        let addr = self.addr.unwrap();
+        let base = addr.wrapping_sub(index as u16);
+        let v = val & ((base >> 8) as u8).wrapping_add(1);
+        let addr = if (base ^ addr) & 0xFF00 != 0 {
+            ((v as u16) << 8) | (addr & 0x00FF)
+        } else {
+            addr
+        };
+        mem[addr] = v;
+    }
+    fn SHA(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        self.store_and_high(mem, self.a & self.x, self.y);
+    }
+    fn SHX(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        self.store_and_high(mem, self.x, self.y);
+    }
+    fn SHY(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        self.store_and_high(mem, self.y, self.x);
+    }
+    fn TAS(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
+        self.sp = self.a & self.x;
+        self.store_and_high(mem, self.sp, self.y);
     }
     fn set_flags_z_n(&mut self, res: u8) {
         self.s.set_zero(res == 0);

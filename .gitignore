@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 /65x02
+/nestest.nes
+/correct_log.txt
+/log.txt

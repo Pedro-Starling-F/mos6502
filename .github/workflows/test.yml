@@ -9,6 +9,8 @@ env:
   CARGO_TERM_COLOR: always
   # SingleStepTests/65x02 commit the suite is verified against
   TESTS_REV: 2f6980a2d95757486c7bee24355c360e40e2a224
+  # christopherpow/nes-test-roms commit providing nestest.nes and nestest.log
+  NESTEST_REV: 95d8f621ae55cee0d09b91519a8989ae0e64753b
 
 jobs:
   test:
@@ -18,8 +20,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # std builds the nestest log comparison, which only applies to the NES
           - cpu: nes6502
-            features: ""
+            features: --features std
           - cpu: "6502"
             features: --features decimal
     steps:
@@ -44,6 +47,17 @@ jobs:
           git clone --filter=blob:none --no-checkout --sparse https://github.com/SingleStepTests/65x02.git 65x02
           git -C 65x02 sparse-checkout set "${{ matrix.cpu }}/v1"
           git -C 65x02 checkout "$TESTS_REV"
+
+      - name: Fetch nestest
+        if: matrix.cpu == 'nes6502'
+        run: |
+          base="https://raw.githubusercontent.com/christopherpow/nes-test-roms/$NESTEST_REV/other"
+          curl -fsSL -o nestest.nes "$base/nestest.nes"
+          curl -fsSL -o correct_log.txt "$base/nestest.log"
+          sha256sum -c - <<'SUMS'
+          f67d55fd6b3cf0bad1cc85f1df0d739c65b53e79cecb7fea8f77ec0eadab0004  nestest.nes
+          442c4dd5539c7e88b3fd73c7b732a7eadbd22b47c2cd9e58397ef147f64f6f8f  correct_log.txt
+          SUMS
 
       # release keeps the 1.1 GB of JSON parsing fast; overflow checks stay on
       - name: Run tests

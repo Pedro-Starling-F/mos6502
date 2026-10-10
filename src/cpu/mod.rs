@@ -55,8 +55,10 @@ enum States {
 
 #[derive(Clone, Debug)]
 pub struct Cpu {
-    //#[cfg(feature = "logging")]
-    //pub log_line: String,
+    // PC, opcode and registers before the instruction runs, laid out like a
+    // Nintendulator/nestest log line
+    #[cfg(feature = "std")]
+    pub log_line: String,
     pub a: u8,
     pub x: u8,
     pub y: u8,
@@ -86,6 +88,8 @@ impl Cpu {
         let mut status = Flags::new();
         status.set(p);
         Cpu {
+            #[cfg(feature = "std")]
+            log_line: String::new(),
             a,
             x,
             y,
@@ -108,8 +112,8 @@ impl Cpu {
             i_pc = 0;
         }
         Cpu {
-            //#[cfg(feature = "logging")]
-            //log_line: "".to_string(),
+            #[cfg(feature = "std")]
+            log_line: String::new(),
             a: 0,
             x: 0,
             y: 0,
@@ -218,7 +222,13 @@ impl Cpu {
         self.pc = self.pc.wrapping_add(1);
         self.cycles += 1;
         self.instruction.set(val);
-        //self.log_line = format!("{:04X}  {:02X}                                        A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{:}\n",pc,val,self.a,self.x,self.y,self.s.get(),self.sp, self.cycles);
+        #[cfg(feature = "std")]
+        {
+            self.log_line = format!(
+                "{:04X}  {:02X}{:40}A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}",
+                pc, val, "", self.a, self.x, self.y, self.s.get(), self.sp
+            );
+        }
         //trace!("{:04X}  {:02X}        A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X} CYC:{:08X}",pc,val,self.a,self.x,self.y,self.s.get(),self.sp, self.cycles);
     }
     fn decode(

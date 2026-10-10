@@ -6,6 +6,11 @@ use std::fmt::format;
 use std::fs;
 //use std::slice::range;
 
+#[cfg(not(feature = "decimal"))]
+const SUITE_DIR: &str = "./65x02/nes6502/v1";
+#[cfg(feature = "decimal")]
+const SUITE_DIR: &str = "./65x02/6502/v1";
+
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
 pub struct Memory {
     pub mem: [u8; 65536],
@@ -36,7 +41,7 @@ pub fn run_tests() {
         use std::env;
         let mut memory_ut: Memory = Memory::new();
         let mut memory_final: Memory = Memory::new();
-        let json_file_path = format!("./65x02/nes6502/v1/{:02x}.json", i);
+        let json_file_path = format!("{}/{:02x}.json", SUITE_DIR, i);
         println!("{}", json_file_path);
         let file = fs::read(json_file_path).unwrap();
         let tests: Vec<Root2> = serde_json::from_reader(file.as_slice()).unwrap();
@@ -125,7 +130,7 @@ pub fn report_all_opcodes() {
         if only.map_or(false, |o| o != op) {
             continue;
         }
-        let path = format!("./65x02/nes6502/v1/{:02x}.json", op);
+        let path = format!("{}/{:02x}.json", SUITE_DIR, op);
         let file = fs::read(&path).unwrap();
         let tests: Vec<Root2> = serde_json::from_slice(&file).unwrap();
         let total = tests.len();

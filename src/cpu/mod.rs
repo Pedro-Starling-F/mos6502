@@ -265,10 +265,7 @@ impl Cpu {
                 self.addr = Some(self.absolute_x(mem));
                 Cpu::SLO
             }
-            0x20 => {
-                self.addr = Some(self.absolute(mem));
-                Cpu::JSR
-            }
+            0x20 => Cpu::JSR,
             0x23 => {
                 self.addr = Some(self.indexed_indirect_x(mem));
                 Cpu::RLA
@@ -780,8 +777,57 @@ impl Cpu {
         let m = mem[self.addr.unwrap()];
         self.add_with_carry(m);
     }
-    // binary-mode add only: the NES 2A03 has no decimal mode
+    // the NES 2A03 has no decimal mode, so only the `decimal` build honours D
+    fn decimal_mode(&self) -> bool {
+        cfg!(feature = "decimal") && self.s.get_decimal()
+    }
     fn add_with_carry(&mut self, m: u8) {
+        if self.decimal_mode() {
+            self.add_decimal(m);
+        } else {
+            self.add_with_carry_binary(m);
+        }
+    }
+    // NMOS BCD add: Z comes from the binary sum, N and V from the sum after
+    // the low-nibble fix-up but before the high-nibble one
+    fn add_decimal(&mut self, m: u8) {
+        let a = self.a as u16;
+        let m16 = m as u16;
+        let c = self.s.get_carry() as u16;
+        let mut lo = (a & 0x0F) + (m16 & 0x0F) + c;
+        if lo >= 0x0A {
+            lo = ((lo + 0x06) & 0x0F) + 0x10;
+        }
+        let mut sum = (a & 0xF0) + (m16 & 0xF0) + lo;
+        self.s.set_zero((a + m16 + c) as u8 == 0);
+        self.s.set_negative(sum & 0x80 == 0x80);
+        self.s.set_overflow((!(a ^ m16) & (a ^ sum) & 0x80) == 0x80);
+        if sum >= 0xA0 {
+            sum += 0x60;
+        }
+        self.s.set_carry(sum >= 0x100);
+        self.a = sum as u8;
+    }
+    fn subtract_with_borrow(&mut self, m: u8) {
+        if !self.decimal_mode() {
+            return self.add_with_carry_binary(!m);
+        }
+        // NMOS BCD subtract: every flag comes from the binary subtraction
+        let a = self.a as i16;
+        let m16 = m as i16;
+        let c = self.s.get_carry() as i16;
+        let mut lo = (a & 0x0F) - (m16 & 0x0F) + c - 1;
+        if lo < 0 {
+            lo = ((lo - 0x06) & 0x0F) - 0x10;
+        }
+        let mut diff = (a & 0xF0) - (m16 & 0xF0) + lo;
+        if diff < 0 {
+            diff -= 0x60;
+        }
+        self.add_with_carry_binary(!m);
+        self.a = diff as u8;
+    }
+    fn add_with_carry_binary(&mut self, m: u8) {
         let tmp = m as u16 + self.a as u16 + self.s.get_carry() as u16;
         let res = tmp as u8;
         let o = (!(self.a ^ m) & (self.a ^ res) & 0x80) == 0x80;
@@ -810,7 +856,7 @@ impl Cpu {
     }
     fn SBC(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         let m = mem[self.addr.unwrap()];
-        self.add_with_carry(!m);
+        self.subtract_with_borrow(m);
     }
     //{ "name": "0e 86 ef", "initial": { "pc": 254, "s": 226, "a": 7, "x": 99, "y": 166, "p": 239, "ram": [ [254, 14], [255, 134], [256, 239], [61318, 149], [257, 103]]}, "final": { "pc": 257, "s": 226, "a": 7, "x": 99, "y": 166, "p": 109, "ram": [ [254, 14], [255, 134], [256, 239], [257, 103], [61318, 42]]}, "cycles": [ [254, 14, "read"], [255, 134, "read"], [256, 239, "read"], [61318, 149, "read"], [61318, 149, "write"], [61318, 42, "write"]] },
 
@@ -951,11 +997,15 @@ impl Cpu {
         self.s.set_interrupt(true);
         self.pc = self.load16(mem, 0xFFFE);
     }
+    // the target's high byte is read after the return address is pushed, so a
+    // push that overwrites the operand changes where JSR jumps
     fn JSR(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
-        let pc = self.pc.wrapping_sub(1);
+        let lo = mem[self.pc];
+        let pc = self.pc.wrapping_add(1);
         self.StackPush(mem,(pc >> 8) as u8);
         self.StackPush(mem, pc as u8);
-        self.pc = self.addr.unwrap();
+        let hi = mem[pc];
+        self.pc = u16::from_le_bytes([lo, hi]);
     }
     fn RTI(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         self.in_nmi = false;
@@ -1138,15 +1188,36 @@ impl Cpu {
         let addr = self.addr.unwrap();
         let m = mem[addr].wrapping_add(1);
         mem[addr] = m;
-        self.add_with_carry(!m);
+        self.subtract_with_borrow(m);
     }
     fn ARR(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {
         let a = self.a & mem[self.addr.unwrap()];
+        if self.decimal_mode() {
+            return self.arr_decimal(a);
+        }
         let a = ((self.s.get_carry() as u8) << 7) | (a >> 1);
         self.a = a;
         self.set_flags_z_n(a);
         self.s.set_carry(a & 0x40 == 0x40);
         self.s.set_overflow(((a >> 6) ^ (a >> 5)) & 1 == 1);
+    }
+    // N mirrors the old carry and V comes from the rotate; then each nibble
+    // gets a BCD-style fix-up, and the high one decides the new carry
+    fn arr_decimal(&mut self, t: u8) {
+        let mut a = ((self.s.get_carry() as u8) << 7) | (t >> 1);
+        self.set_flags_z_n(a);
+        self.s.set_overflow((t ^ a) & 0x40 == 0x40);
+        let lo = t & 0x0F;
+        let hi = t >> 4;
+        if lo + (lo & 1) > 5 {
+            a = (a & 0xF0) | (a.wrapping_add(6) & 0x0F);
+        }
+        let carry = hi + (hi & 1) > 5;
+        if carry {
+            a = a.wrapping_add(0x60);
+        }
+        self.s.set_carry(carry);
+        self.a = a;
     }
     // ANE and LXA are unstable on real hardware; 0xEE is the constant the test suite uses
     fn ANE(&mut self, mem: &mut dyn IndexMut<u16, Output = u8>) {

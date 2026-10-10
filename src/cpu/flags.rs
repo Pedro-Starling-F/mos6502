@@ -46,6 +46,9 @@ impl Flags {
     pub fn get_overflow(&self) -> bool{
         self.gets(6)
     }
+    pub fn get_decimal(&self) -> bool{
+        self.gets(3)
+    }
     pub fn get_interrupt(&self) -> bool{
         self.gets(2)
     }

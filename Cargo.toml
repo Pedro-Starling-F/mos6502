@@ -29,6 +29,9 @@ serde_json = "1.0.145"
 default = ["logging"]
 std = []
 logging = ["dep:log", "dep:simple_logger"]
+# Standard NMOS 6502: ADC/SBC (and RRA/ISC/ARR) honour the decimal flag.
+# Leave it off for the NES 2A03, which has no decimal mode.
+decimal = []
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
